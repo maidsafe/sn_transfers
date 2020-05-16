@@ -36,15 +36,17 @@ pub struct Actor {
 impl Actor {
     /// Pass in a function to retrieve any incoming transfers.
     /// Without it, there is no Actor, since there is no balance.
+    /// It is the responsibility of the upper layer to perform necessary
+    /// validations on the received Transfer.
     pub fn get(client_id: ClientFullId, sync: fn(Identity) -> Option<Transfer>) -> Option<Actor> {
         let id = *client_id.public_id().public_key();
         match sync(id) {
             None => None,
             Some(transfer) => Some(Actor {
-                id,
+                id: transfer.to,
                 client_id,
                 // pk_set, // temporary exclude
-                history: History::new(id, transfer),
+                history: History::new(transfer),
                 pending_transfers_checkpoint: None,
                 received_validations: Default::default(),
             }),

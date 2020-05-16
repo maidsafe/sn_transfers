@@ -7,36 +7,46 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::Identity;
-use safe_nd::{Error, Money, Result, Transfer, TransferIndices};
+use safe_nd::{Error, Money, Result, Transfer, TransferId, TransferIndices};
+use std::collections::HashSet;
 
-///
+/// History of transfers for an identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct History {
     id: Identity,
     balance: Money,
     incoming: Vec<Transfer>,
     outgoing: Vec<Transfer>,
+    transfer_ids: HashSet<TransferId>,
 }
 
 impl History {
-    ///
-    pub fn new(id: Identity, first: Transfer) -> Self {
+    /// Creates a new history, requires an incoming transfer.
+    pub fn new(first: Transfer) -> Self {
+        let mut transfer_ids = HashSet::new();
+        let _ = transfer_ids.insert(first.id);
         Self {
-            id,
+            id: first.to,
             balance: Money::zero(),
             incoming: vec![first],
             outgoing: Default::default(),
+            transfer_ids,
         }
     }
 
-    ///
+    /// Query for next version.
     pub fn next_version(&self) -> u64 {
         self.outgoing.len() as u64
     }
 
-    ///
+    /// Query for balance.
     pub fn balance(&self) -> Money {
         self.balance
+    }
+
+    /// Query for already stored transfer.
+    pub fn contains(&self, id: &TransferId) -> bool {
+        self.transfer_ids.contains(id)
     }
 
     /// Zero based indexing, first (outgoing) transfer will be nr 0
@@ -53,7 +63,7 @@ impl History {
         };
     }
 
-    ///
+    /// Query for new transfers since some index.
     pub fn new_since(&self, indices: TransferIndices) -> (Vec<Transfer>, Vec<Transfer>) {
         let in_include_index = indices.incoming + 1;
         let out_include_index = indices.outgoing + 1;
@@ -70,19 +80,21 @@ impl History {
         (new_incoming, new_outgoing)
     }
 
-    ///
+    /// Mutates state.
     pub fn append(&mut self, transfer: Transfer) {
         if self.id == transfer.id.actor {
             match self.balance.checked_sub(transfer.amount) {
                 Some(amount) => self.balance = amount,
-                None => panic!(),
+                None => panic!("overflow when subtracting!"),
             }
+            let _ = self.transfer_ids.insert(transfer.id);
             self.outgoing.push(transfer);
         } else if self.id == transfer.to {
             match self.balance.checked_add(transfer.amount) {
                 Some(amount) => self.balance = amount,
-                None => panic!(),
+                None => panic!("overflow when adding!"),
             }
+            let _ = self.transfer_ids.insert(transfer.id);
             self.incoming.push(transfer);
         } else {
             panic!("Transfer does not belong to this history")

@@ -49,8 +49,7 @@ impl Replica {
     /// This is the one and only infusion of money to the system. Ever.
     /// It is carried out by the first node in the network.
     /// WIP
-    pub fn genesis(&self, cmd: RegisterTransfer) -> Result<TransferPropagated> {
-        let proof = cmd.proof;
+    pub fn genesis(&self, proof: ProofOfAgreement) -> Result<TransferPropagated> {
         // Always verify signature first! (as to not leak any information).
         if !self.verify_proof(&proof) {
             return Err(Error::InvalidSignature);
@@ -102,10 +101,10 @@ impl Replica {
     }
 
     /// Main business logic validation of a debit.
-    pub fn validate_transfer(&self, transfer_cmd: ValidateTransfer) -> Result<TransferValidated> {
-        let transfer = &transfer_cmd.transfer;
+    pub fn validate(&self, cmd: ValidateTransfer) -> Result<TransferValidated> {
+        let transfer = &cmd.transfer;
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_cmd_signature(&transfer_cmd) {
+        if !self.verify_cmd_signature(&cmd) {
             return Err(Error::InvalidSignature);
         }
         if transfer.id.actor == transfer.to {
@@ -129,24 +128,22 @@ impl Replica {
             None => return Err(Error::NoSuchSender), //"From account doesn't exist"
         }
 
-        let elder_signature = self.sign(&transfer_cmd);
+        let elder_signature = self.sign(&cmd);
         Ok(TransferValidated {
-            transfer_cmd,
+            transfer_cmd: cmd,
             elder_signature,
             //pk_set: self.pk_set, // temporary exclude
         })
     }
 
     /// Validation of agreement, and order.
-    pub fn register_transfer(&self, cmd: RegisterTransfer) -> Result<TransferRegistered> {
-        let proof = cmd.proof;
+    pub fn register(&self, proof: ProofOfAgreement) -> Result<TransferRegistered> {
         // Always verify signature first! (as to not leak any information).
         if !self.verify_proof(&proof) {
             return Err(Error::InvalidSignature);
         }
         let transfer = &proof.transfer_cmd.transfer;
-        let id = transfer.id;
-        let sender = self.histories.get(&id.actor);
+        let sender = self.histories.get(&transfer.id.actor);
         match sender {
             None => Err(Error::NoSuchSender),
             Some(history) => match history.is_sequential(transfer) {
@@ -164,16 +161,26 @@ impl Replica {
 
     /// Validation of agreement.
     /// Since this leads to a credit, there is no requirement on order.
-    pub fn propagate_transfer(&self, cmd: RegisterTransfer) -> Result<TransferPropagated> {
-        let proof = cmd.proof;
+    pub fn propagate(&self, proof: ProofOfAgreement) -> Result<TransferPropagated> {
         // Always verify signature first! (as to not leak any information).
         if !self.verify_proof(&proof) {
             return Err(Error::InvalidSignature);
         }
-        Ok(TransferPropagated { proof })
+        let transfer = &proof.transfer_cmd.transfer;
+        let already_exists = match self.histories.get(&transfer.to) {
+            None => false,
+            Some(history) => history.contains(&transfer.id),
+        };
+        if already_exists {
+            Err(Error::TransferIdExists)
+        } else {
+            Ok(TransferPropagated { proof })
+        }
     }
 
     /// Mutation of state.
+    /// There is no validation of an event, it is assumed to have
+    /// been properly validated before raised, and thus anything that breaks is a bug.
     pub fn apply(&mut self, event: ReplicaEvent) {
         match event {
             ReplicaEvent::TransferValidated(e) => {
@@ -182,26 +189,22 @@ impl Replica {
             }
             ReplicaEvent::TransferRegistered(e) => {
                 let transfer = e.proof.transfer_cmd.transfer;
-                self.append(transfer.id.actor, transfer);
+                self.histories
+                    .get_mut(&transfer.id.actor)
+                    .unwrap()
+                    .append(transfer);
             }
             ReplicaEvent::TransferPropagated(e) => {
                 let transfer = e.proof.transfer_cmd.transfer;
-                self.append(transfer.to, transfer);
+                match self.histories.get_mut(&transfer.to) {
+                    Some(history) => history.append(transfer),
+                    None => {
+                        // Creates if not exists.
+                        let _ = self.histories.insert(transfer.to, History::new(transfer));
+                    }
+                }
             }
         };
-    }
-
-    // Extend the history for the key.
-    fn append(&mut self, key: Identity, transfer: Transfer) {
-        // Creates if not exists.
-        match self.histories.get_mut(&key) {
-            Some(history) => history.append(transfer),
-            None => {
-                let _ = self
-                    .histories
-                    .insert(key, History::new(key, transfer.clone()));
-            }
-        }
     }
 
     fn sign(&self, _cmd: &ValidateTransfer) -> SignatureShare {
