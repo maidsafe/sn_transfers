@@ -11,8 +11,8 @@ use crdts::{CmRDT, VClock};
 use std::collections::HashMap;
 
 use safe_nd::{
-    Error, Money, ProofOfAgreement, RegisterTransfer, Result, Signature, Transfer, TransferIndices,
-    TransferRegistered, TransferValidated, ValidateTransfer,
+    Error, Money, ProofOfAgreement, Result, Signature, Transfer, TransferRegistered,
+    TransferValidated, ValidateTransfer,
 };
 use threshold_crypto::SignatureShare;
 
@@ -61,15 +61,21 @@ impl Replica {
         Ok(TransferPropagated { proof })
     }
 
-    ///
-    pub fn history(
-        &self,
-        identity: &Identity,
-        since_indices: TransferIndices,
-    ) -> Option<(Vec<Transfer>, Vec<Transfer>)> {
+    /// Query for new incoming transfers since specified index.
+    /// NB: This is not guaranteed to give you all unknown to you,
+    /// since there is no absolute order on the incoming!
+    pub fn incoming_since(&self, identity: &Identity, index: usize) -> Option<Vec<Transfer>> {
         match self.histories.get(&identity).cloned() {
             None => None,
-            Some(history) => Some(history.new_since(since_indices)),
+            Some(history) => Some(history.incoming_since(index)),
+        }
+    }
+
+    /// Query for new outgoing transfers since specified index.
+    pub fn outgoing_since(&self, identity: &Identity, index: usize) -> Option<Vec<Transfer>> {
+        match self.histories.get(&identity).cloned() {
+            None => None,
+            Some(history) => Some(history.outgoing_since(index)),
         }
     }
 

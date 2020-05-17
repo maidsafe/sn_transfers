@@ -7,7 +7,7 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::Identity;
-use safe_nd::{Error, Money, Result, Transfer, TransferId, TransferIndices};
+use safe_nd::{Error, Money, Result, Transfer, TransferId};
 use std::collections::HashSet;
 
 /// History of transfers for an identity.
@@ -53,31 +53,36 @@ impl History {
     /// (we could just as well just compare outgoing.len()..)
     pub fn is_sequential(&self, transfer: &Transfer) -> Result<bool> {
         let id = transfer.id;
-        return if id.actor != self.id {
+        if id.actor != self.id {
             Err(Error::InvalidOperation)
         } else {
             match self.outgoing.last() {
                 None => Ok(id.counter == 0), // if not outgoing transfers have been made, transfer counter must be 0
                 Some(previous) => Ok(previous.id.counter + 1 == id.counter),
             }
-        };
+        }
     }
 
-    /// Query for new transfers since some index.
-    pub fn new_since(&self, indices: TransferIndices) -> (Vec<Transfer>, Vec<Transfer>) {
-        let in_include_index = indices.incoming + 1;
-        let out_include_index = indices.outgoing + 1;
-        let new_incoming = if self.incoming.len() > in_include_index {
-            self.incoming.split_at(in_include_index).1.to_vec()
+    /// Query for new incoming transfers since specified index.
+    /// NB: This is not guaranteed to give you all unknown to you,
+    /// since there is no absolute order on the incoming!
+    pub fn incoming_since(&self, index: usize) -> Vec<Transfer> {
+        let include_index = index + 1;
+        if self.incoming.len() > include_index {
+            self.incoming.split_at(include_index).1.to_vec()
         } else {
             vec![]
-        };
-        let new_outgoing = if self.incoming.len() > out_include_index {
-            self.incoming.split_at(out_include_index).1.to_vec()
+        }
+    }
+
+    /// Query for new outgoing transfers since specified index.
+    pub fn outgoing_since(&self, index: usize) -> Vec<Transfer> {
+        let include_index = index + 1;
+        if self.outgoing.len() > include_index {
+            self.outgoing.split_at(include_index).1.to_vec()
         } else {
             vec![]
-        };
-        (new_incoming, new_outgoing)
+        }
     }
 
     /// Mutates state.

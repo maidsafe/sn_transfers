@@ -15,7 +15,7 @@ use std::collections::HashSet;
 
 use safe_nd::{
     ClientFullId, Error, Money, ProofOfAgreement, RegisterTransfer, Result, Signature, Transfer,
-    TransferIndices, TransferValidated, ValidateTransfer,
+    TransferValidated, ValidateTransfer,
 };
 
 /// The Actor is the part of an AT2 system
@@ -56,9 +56,16 @@ impl Actor {
         }
     }
 
-    /// Query
-    pub fn local_history(&self, since_indices: TransferIndices) -> (Vec<Transfer>, Vec<Transfer>) {
-        self.history.new_since(since_indices)
+    /// Query for new incoming transfers since specified index.
+    /// NB: This is not guaranteed to give you all unknown to you,
+    /// since there is no absolute order on the incoming!
+    pub fn incoming_since(&self, index: usize) -> Vec<Transfer> {
+        self.history.incoming_since(index)
+    }
+
+    /// Query for new outgoing transfers since specified index.
+    pub fn outgoing_since(&self, index: usize) -> Vec<Transfer> {
+        self.history.outgoing_since(index)
     }
 
     /// Query
@@ -76,7 +83,7 @@ impl Actor {
 
         match self.pending_transfers_checkpoint {
             None => {
-                if id.counter > 0 {
+                if id.counter != 0 {
                     return Err(Error::InvalidOperation); // "out of order msg"
                 }
             }
@@ -231,7 +238,7 @@ impl Actor {
 
     fn sign(&self, transfer: &Transfer) -> Result<Signature> {
         match bincode::serialize(transfer) {
-            Err(_) => Err(Error::NetworkOther("Could not serialise".into())),
+            Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => Ok(self.client_id.sign(data)),
         }
     }
