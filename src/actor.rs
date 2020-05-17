@@ -6,13 +6,16 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use super::{history::History, ActorEvent, Identity, TransferInitiated};
+use super::{
+    history::History, ActorEvent, Identity, RemoteTransfersSynced, TransferInitiated,
+    TransferRegistrationSent, TransferValidationReceived,
+};
 use crdts::Dot;
 use std::collections::HashSet;
 
 use safe_nd::{
     ClientFullId, Error, Money, ProofOfAgreement, RegisterTransfer, Result, Signature, Transfer,
-    TransferIndices, TransferRegistered, TransferValidated, ValidateTransfer,
+    TransferIndices, TransferValidated, ValidateTransfer,
 };
 
 /// The Actor is the part of an AT2 system
@@ -63,8 +66,8 @@ impl Actor {
         self.history.balance()
     }
 
-    /// Build a valid cmd for validation of a transfer.
-    pub fn validate_transfer(&self, amount: Money, to: Identity) -> Result<TransferInitiated> {
+    /// Step 1. Build a valid cmd for validation of a transfer.
+    pub fn initiate(&self, amount: Money, to: Identity) -> Result<TransferInitiated> {
         if to == self.id {
             return Err(Error::InvalidOperation); // "Sender and recipient are the same"
         }
@@ -78,7 +81,12 @@ impl Actor {
                 }
             }
             Some(counter) => {
-                if id.counter != counter + 1 {
+                let next_pending = counter + 1;
+                if next_pending != self.history.next_version() {
+                    // ensures one transfer is completed at a time
+                    return Err(Error::InvalidOperation); // "current pending transfer has not been completed"
+                }
+                if next_pending != id.counter {
                     return Err(Error::InvalidOperation); // "either already proposed or out of order msg"
                 }
             }
@@ -100,22 +108,59 @@ impl Actor {
         }
     }
 
-    /// Build a valid cmd for registration of an agreed transfer.
-    pub fn register_transfer(&self, proof: ProofOfAgreement) -> Result<RegisterTransfer> {
+    /// Step 2. Receive validations from Replicas, aggregate the signatures.
+    pub fn receive(&self, validation: TransferValidated) -> Result<TransferValidationReceived> {
+        // Always verify signature first! (as to not leak any information).
+        if !self.verify_validation(&validation) {
+            return Err(Error::InvalidSignature);
+        }
+        match self.pending_transfers_checkpoint {
+            None => return Err(Error::InvalidOperation), // "there is no pending transfer, cannot receive validations"
+            Some(counter) => {
+                if counter != validation.transfer_cmd.transfer.id.counter {
+                    return Err(Error::InvalidOperation); // "out of order validation"
+                }
+            }
+        }
+        if self.received_validations.contains(&validation) {
+            return Err(Error::InvalidOperation); // "Already received validation"
+        }
+
+        // TODO: check if quorum validations, and construct the proof
+
+        Ok(TransferValidationReceived {
+            validation,
+            proof: None,
+        })
+    }
+
+    /// Step 3. Build a valid cmd for registration of an agreed transfer.
+    pub fn register(&self, proof: ProofOfAgreement) -> Result<TransferRegistrationSent> {
         // Always verify signature first! (as to not leak any information).
         if !self.verify_proof(&proof) {
             return Err(Error::InvalidSignature);
         }
         match self.history.is_sequential(&proof.transfer_cmd.transfer) {
-            Ok(is_seq) => {
-                if is_seq {
-                    Ok(RegisterTransfer { proof })
+            Ok(is_sequential) => {
+                if is_sequential {
+                    Ok(TransferRegistrationSent {
+                        cmd: RegisterTransfer { proof },
+                    })
                 } else {
                     Err(Error::InvalidOperation) // "Non-sequential operation"
                 }
             }
             Err(_) => Err(Error::InvalidOperation), // from this place this code won't happen, but history validates the transfer is actually outgoing from it's owner.
         }
+    }
+
+    /// Continuous syncing from Replicas ensure
+    /// that we receive incoming transfers.
+    /// With multiple devices we can also sync outgoing made on other devices.
+    pub fn sync_remote(transfers: (Vec<Transfer>, Vec<Transfer>)) -> Result<RemoteTransfersSynced> {
+        let (incoming, outgoing) = transfers;
+        // TODO: validate.. validate..
+        Ok(RemoteTransfersSynced { incoming, outgoing })
     }
 
     /// Mutation of state.
@@ -125,15 +170,24 @@ impl Actor {
                 let transfer = e.cmd.transfer;
                 self.pending_transfers_checkpoint = Some(transfer.id.counter);
             }
-            ActorEvent::TransferValidated(e) => {
-                let _ = self.received_validations.insert(e);
+            ActorEvent::TransferValidationReceived(e) => {
+                let _ = self.received_validations.insert(e.validation);
             }
-            ActorEvent::TransferRegistered(e) => {
-                let transfer = e.proof.transfer_cmd.transfer;
+            ActorEvent::TransferRegistrationSent(e) => {
+                let transfer = e.cmd.proof.transfer_cmd.transfer;
                 self.history.append(transfer);
                 self.received_validations.clear();
             }
+            ActorEvent::RemoteTransfersSynced(e) => {
+                for transfer in e.incoming {
+                    self.history.append(transfer);
+                }
+                for transfer in e.outgoing {
+                    self.history.append(transfer);
+                }
+            }
         };
+        // consider event log, to properly be able to rehydrate state
     }
 
     fn sign(&self, transfer: &Transfer) -> Result<Signature> {
@@ -143,7 +197,7 @@ impl Actor {
         }
     }
 
-    fn verify_validation_sig(&self, event: &TransferValidated) -> bool {
+    fn verify_validation(&self, event: &TransferValidated) -> bool {
         unimplemented!()
     }
 

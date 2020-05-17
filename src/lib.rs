@@ -35,7 +35,8 @@ pub use self::{
 };
 
 use safe_nd::{
-    ProofOfAgreement, PublicKey, TransferRegistered, TransferValidated, ValidateTransfer,
+    ProofOfAgreement, PublicKey, RegisterTransfer, Transfer, TransferRegistered, TransferValidated,
+    ValidateTransfer,
 };
 use serde::{Deserialize, Serialize};
 
@@ -65,21 +66,57 @@ pub struct TransferPropagated {
     pub proof: ProofOfAgreement,
 }
 
-/// Events raised by the Replica.
+/// Events raised by the Actor.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
 pub enum ActorEvent {
-    ///
+    /// Raised when a request to create
+    /// a transfer validation cmd for Replicas,
+    /// has been successful (valid on local state).
     TransferInitiated(TransferInitiated),
-    /// The event raised when
-    /// ValidateTransfer cmd has been successful.
-    TransferValidated(TransferValidated),
-    /// The event raised when
-    /// RegisterTransfer cmd has been successful.
-    TransferRegistered(TransferRegistered),
+    /// Raised when an Actor receives a Replica transfer validation.
+    TransferValidationReceived(TransferValidationReceived),
+    /// Raised when the Actor has accumulated a
+    /// quorum of validations, and produced a RegisterTransfer cmd
+    /// for sending to Replicas.
+    TransferRegistrationSent(TransferRegistrationSent),
+    /// Raised when the Actor has received
+    /// unknown transfers on querying Replicas.
+    RemoteTransfersSynced(RemoteTransfersSynced),
 }
 
-///
+/// This event is raised by the Actor after having
+/// successfully created a transfer cmd to send to the
+/// Replicas for validation.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
 pub struct TransferInitiated {
     cmd: ValidateTransfer,
+}
+
+/// Raised when a Replica responds with
+/// a successful validation of a transfer.
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+pub struct TransferValidationReceived {
+    /// The event raised by a Replica.
+    validation: TransferValidated,
+    /// Added when quorum of validations
+    /// have been received from Replicas.
+    proof: Option<ProofOfAgreement>,
+}
+
+/// Raised when the Actor has accumulated a
+/// quorum of validations, and produced a RegisterTransfer cmd
+/// for sending to Replicas.
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+pub struct TransferRegistrationSent {
+    cmd: RegisterTransfer,
+}
+
+/// Raised when the Actor has received
+/// unknown transfers on querying Replicas.
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+pub struct RemoteTransfersSynced {
+    /// credits
+    incoming: Vec<Transfer>,
+    /// debits
+    outgoing: Vec<Transfer>,
 }
