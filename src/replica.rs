@@ -100,7 +100,7 @@ impl Replica {
         }
     }
 
-    /// Main business logic validation of a debit.
+    /// Step 1. Main business logic validation of a debit.
     pub fn validate(&self, cmd: ValidateTransfer) -> Result<TransferValidated> {
         let transfer = &cmd.transfer;
         // Always verify signature first! (as to not leak any information).
@@ -136,7 +136,7 @@ impl Replica {
         })
     }
 
-    /// Validation of agreement, and order.
+    /// Step 2. Validation of agreement, and order at debit source.
     pub fn register(&self, proof: ProofOfAgreement) -> Result<TransferRegistered> {
         // Always verify signature first! (as to not leak any information).
         if !self.verify_proof(&proof) {
@@ -159,8 +159,8 @@ impl Replica {
         }
     }
 
-    /// Validation of agreement.
-    /// Since this leads to a credit, there is no requirement on order.
+    /// Step 3. Validation of agreement, and idempotency at credit destination.
+    /// (Since this leads to a credit, there is no requirement on order.)
     pub fn propagate(&self, proof: ProofOfAgreement) -> Result<TransferPropagated> {
         // Always verify signature first! (as to not leak any information).
         if !self.verify_proof(&proof) {

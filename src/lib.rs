@@ -116,7 +116,7 @@ pub struct TransferRegistrationSent {
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
 pub struct RemoteTransfersSynced {
     /// credits
-    incoming: Vec<Transfer>,
+    incoming: Vec<ProofOfAgreement>,
     /// debits
-    outgoing: Vec<Transfer>,
+    outgoing: Vec<ProofOfAgreement>,
 }

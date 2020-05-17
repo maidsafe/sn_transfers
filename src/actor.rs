@@ -154,16 +154,55 @@ impl Actor {
         }
     }
 
-    /// Continuous syncing from Replicas ensure
-    /// that we receive incoming transfers.
+    /// Step xx. Continuous syncing from Replicas ensure
+    /// that we receive incoming transfers. This can be push or pull model, decided by upper layer.
     /// With multiple devices we can also sync outgoing made on other devices.
-    pub fn sync_remote(transfers: (Vec<Transfer>, Vec<Transfer>)) -> Result<RemoteTransfersSynced> {
-        let (incoming, outgoing) = transfers;
-        // TODO: validate.. validate..
-        Ok(RemoteTransfersSynced { incoming, outgoing })
+    pub fn sync_from_replica(
+        &self,
+        incoming: Vec<ProofOfAgreement>,
+        outgoing: Vec<ProofOfAgreement>,
+    ) -> Result<RemoteTransfersSynced> {
+        let valid_incoming = incoming
+            .iter()
+            .filter(|t| self.verify_proof(t))
+            .filter(|t| self.id == t.transfer_cmd.transfer.to)
+            .filter(|t| !self.history.contains(&t.transfer_cmd.transfer.id))
+            .map(|t| t.clone())
+            .collect::<Vec<ProofOfAgreement>>();
+
+        let mut outgoing = outgoing
+            .iter()
+            .filter(|t| self.verify_proof(t))
+            .filter(|t| self.id == t.transfer_cmd.transfer.id.actor)
+            .collect::<Vec<&ProofOfAgreement>>();
+
+        outgoing.sort_by_key(|t| t.transfer_cmd.transfer.id.counter);
+
+        let mut iter = 0;
+        let mut valid_outgoing = vec![];
+        for out in outgoing {
+            let version = out.transfer_cmd.transfer.id.counter;
+            let expected_version = iter + self.history.next_version();
+            if version != expected_version {
+                break; // since it's sorted, if first is not matching, then no point continuing
+            }
+            valid_outgoing.push(out.clone());
+            iter += 1;
+        }
+
+        if valid_incoming.len() > 0 || valid_outgoing.len() > 0 {
+            Ok(RemoteTransfersSynced {
+                incoming: valid_incoming,
+                outgoing: valid_outgoing,
+            })
+        } else {
+            Err(Error::InvalidOperation)
+        }
     }
 
     /// Mutation of state.
+    /// There is no validation of an event, it is assumed to have
+    /// been properly validated before raised, and thus anything that breaks is a bug.
     pub fn apply(&mut self, event: ActorEvent) {
         match event {
             ActorEvent::TransferInitiated(e) => {
@@ -179,15 +218,15 @@ impl Actor {
                 self.received_validations.clear();
             }
             ActorEvent::RemoteTransfersSynced(e) => {
-                for transfer in e.incoming {
-                    self.history.append(transfer);
+                for proof in e.incoming {
+                    self.history.append(proof.transfer_cmd.transfer);
                 }
-                for transfer in e.outgoing {
-                    self.history.append(transfer);
+                for proof in e.outgoing {
+                    self.history.append(proof.transfer_cmd.transfer);
                 }
             }
         };
-        // consider event log, to properly be able to rehydrate state
+        // consider event log, to properly be able to reconstruct state from restart
     }
 
     fn sign(&self, transfer: &Transfer) -> Result<Signature> {
