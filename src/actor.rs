@@ -32,28 +32,30 @@ pub struct Actor {
     history: History,
     /// Ensures that the actor's transfer
     /// initiations (ValidateTransfer cmd) are sequential.
-    pending_transfers_checkpoint: Option<u64>,
-    received_validations: HashSet<TransferValidated>,
+    current_transfer_version: Option<u64>,
+    /// When a transfer is initiated, validations are accumulated here.
+    /// After quorum is reached and proof produced, the set is cleared.
+    accumulating_validations: HashSet<TransferValidated>,
 }
 
 impl Actor {
-    /// Pass in a function to retrieve any incoming transfers.
+    /// Pass in a first incoming transfer.
     /// Without it, there is no Actor, since there is no balance.
-    /// It is the responsibility of the upper layer to perform necessary
-    /// validations on the received Transfer.
-    pub fn get(client_id: ClientFullId, sync: fn(Identity) -> Option<Transfer>) -> Option<Actor> {
+    /// There is no essential validations here, since without a valid transfer
+    /// this Actor can't really convince Replicas to do anything.
+    pub fn get(client_id: ClientFullId, transfer: Transfer) -> Option<Actor> {
         let id = *client_id.public_id().public_key();
-        match sync(id) {
-            None => None,
-            Some(transfer) => Some(Actor {
-                id: transfer.to,
-                client_id,
-                // pk_set, // temporary exclude
-                history: History::new(transfer),
-                pending_transfers_checkpoint: None,
-                received_validations: Default::default(),
-            }),
+        if id != transfer.to {
+            return None;
         }
+        Some(Actor {
+            id: transfer.to,
+            client_id,
+            // pk_set, // temporary exclude
+            history: History::new(transfer),
+            current_transfer_version: None,
+            accumulating_validations: Default::default(),
+        })
     }
 
     /// Query for new incoming transfers since specified index.
@@ -81,19 +83,19 @@ impl Actor {
 
         let id = Dot::new(self.id, self.history.next_version());
 
-        match self.pending_transfers_checkpoint {
+        match self.current_transfer_version {
             None => {
                 if id.counter != 0 {
                     return Err(Error::InvalidOperation); // "out of order msg"
                 }
             }
-            Some(counter) => {
-                let next_pending = counter + 1;
-                if next_pending != self.history.next_version() {
+            Some(current_version) => {
+                let next_version = current_version + 1;
+                if next_version != self.history.next_version() {
                     // ensures one transfer is completed at a time
                     return Err(Error::InvalidOperation); // "current pending transfer has not been completed"
                 }
-                if next_pending != id.counter {
+                if next_version != id.counter {
                     return Err(Error::InvalidOperation); // "either already proposed or out of order msg"
                 }
             }
@@ -121,7 +123,7 @@ impl Actor {
         if !self.verify_validation(&validation) {
             return Err(Error::InvalidSignature);
         }
-        match self.pending_transfers_checkpoint {
+        match self.current_transfer_version {
             None => return Err(Error::InvalidOperation), // "there is no pending transfer, cannot receive validations"
             Some(counter) => {
                 if counter != validation.transfer_cmd.transfer.id.counter {
@@ -129,7 +131,7 @@ impl Actor {
                 }
             }
         }
-        if self.received_validations.contains(&validation) {
+        if self.accumulating_validations.contains(&validation) {
             return Err(Error::InvalidOperation); // "Already received validation"
         }
 
@@ -214,15 +216,15 @@ impl Actor {
         match event {
             ActorEvent::TransferInitiated(e) => {
                 let transfer = e.cmd.transfer;
-                self.pending_transfers_checkpoint = Some(transfer.id.counter);
+                self.current_transfer_version = Some(transfer.id.counter);
             }
             ActorEvent::TransferValidationReceived(e) => {
-                let _ = self.received_validations.insert(e.validation);
+                let _ = self.accumulating_validations.insert(e.validation);
             }
             ActorEvent::TransferRegistrationSent(e) => {
                 let transfer = e.cmd.proof.transfer_cmd.transfer;
                 self.history.append(transfer);
-                self.received_validations.clear();
+                self.accumulating_validations.clear();
             }
             ActorEvent::RemoteTransfersSynced(e) => {
                 for proof in e.incoming {

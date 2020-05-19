@@ -153,8 +153,8 @@ impl Replica {
         match sender {
             None => Err(Error::NoSuchSender),
             Some(history) => match history.is_sequential(transfer) {
-                Ok(is_seq) => {
-                    if is_seq {
+                Ok(is_sequential) => {
+                    if is_sequential {
                         Ok(TransferRegistered { proof })
                     } else {
                         Err(Error::InvalidOperation) // "Non-sequential operation"
@@ -185,8 +185,9 @@ impl Replica {
     }
 
     /// Mutation of state.
-    /// There is no validation of an event, it is assumed to have
-    /// been properly validated before raised, and thus anything that breaks is a bug.
+    /// There is no validation of an event, it (the cmd) is assumed to have
+    /// been properly validated before the fact is established (event raised),
+    /// and thus anything that breaks here, is a bug in the validation..
     pub fn apply(&mut self, event: ReplicaEvent) {
         match event {
             ReplicaEvent::TransferValidated(e) => {
@@ -197,7 +198,7 @@ impl Replica {
                 let transfer = e.proof.transfer_cmd.transfer;
                 self.histories
                     .get_mut(&transfer.id.actor)
-                    .unwrap()
+                    .unwrap() // this is OK, since eventsourcing implies events are _facts_, you have a bug if it fails here..
                     .append(transfer);
             }
             ReplicaEvent::TransferPropagated(e) => {
@@ -211,6 +212,7 @@ impl Replica {
                 }
             }
         };
+        // consider event log, to properly be able to reconstruct state from restart
     }
 
     fn sign(&self, _cmd: &ValidateTransfer) -> SignatureShare {
