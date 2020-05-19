@@ -1,5 +1,5 @@
 # safe-transfers
-Safe Network Economy
+The Transfer component of a Safe Network Economy
 
 |Crate|Documentation|CI|Safe Rust|
 |:-:|:-:|:-:|:-:|
