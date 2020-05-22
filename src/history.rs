@@ -115,28 +115,28 @@ mod test {
     fn creates_with_ctor_state() {
         // Arrange
         let balance = Money::from_nano(10);
-        let first_deposit = Transfer {
+        let first_incoming = Transfer {
             id: Dot::new(get_random_pk(), 0),
             to: get_random_pk(),
             amount: balance,
         };
 
         // Act
-        let history = History::new(first_deposit.clone());
+        let history = History::new(first_incoming.clone());
         let incoming = history.incoming_since(0);
         let outgoing = history.outgoing_since(0);
         let first_outgoing = Transfer {
-            id: Dot::new(first_deposit.to, 0),
+            id: Dot::new(first_incoming.to, 0),
             to: get_random_pk(),
             amount: balance,
         };
         let is_sequential = history.is_sequential(&first_outgoing);
 
         // Assert
-        assert!(history.contains(&first_deposit.id));
+        assert!(history.contains(&first_incoming.id));
         assert!(history.balance() == balance);
         assert!(incoming.len() == 1);
-        assert!(incoming[0] == first_deposit);
+        assert!(incoming[0] == first_incoming);
         assert!(outgoing.len() == 0);
         assert!(history.next_version() == 0);
         assert!(is_sequential.is_ok() && is_sequential.unwrap());
@@ -146,23 +146,24 @@ mod test {
     fn appends_outgoing() {
         // Arrange
         let balance = Money::from_nano(10);
-        let first_deposit = Transfer {
+        let first_incoming = Transfer {
             id: Dot::new(get_random_pk(), 0),
             to: get_random_pk(),
             amount: balance,
         };
-        let mut history = History::new(first_deposit.clone());
+        let mut history = History::new(first_incoming.clone());
         let first_outgoing = Transfer {
-            id: Dot::new(first_deposit.to, 0),
+            id: Dot::new(first_incoming.to, 0),
             to: get_random_pk(),
             amount: balance,
         };
 
         // Act
         history.append(first_outgoing.clone());
+        let incoming = history.incoming_since(0);
         let outgoing = history.outgoing_since(0);
         let is_sequential = history.is_sequential(&Transfer {
-            id: Dot::new(first_deposit.to, 1),
+            id: Dot::new(first_incoming.to, 1),
             to: get_random_pk(),
             amount: balance,
         });
@@ -172,7 +173,45 @@ mod test {
         assert!(history.balance() == Money::zero());
         assert!(outgoing.len() == 1);
         assert!(outgoing[0] == first_outgoing);
+        assert!(incoming.len() == 1);
+        assert!(incoming[0] == first_incoming);
         assert!(history.next_version() == 1);
+        assert!(is_sequential.is_ok() && is_sequential.unwrap());
+    }
+
+    #[test]
+    fn appends_incoming() {
+        // Arrange
+        let balance = Money::from_nano(10);
+        let first_incoming = Transfer {
+            id: Dot::new(get_random_pk(), 0),
+            to: get_random_pk(),
+            amount: balance,
+        };
+        let mut history = History::new(first_incoming.clone());
+        let second_incoming = Transfer {
+            id: Dot::new(get_random_pk(), 0),
+            to: first_incoming.to,
+            amount: balance,
+        };
+
+        // Act
+        history.append(second_incoming.clone());
+        let incoming = history.incoming_since(0);
+        let outgoing = history.outgoing_since(0);
+        let is_sequential = history.is_sequential(&Transfer {
+            id: Dot::new(first_incoming.to, 0),
+            to: get_random_pk(),
+            amount: balance,
+        });
+
+        // Assert
+        assert!(history.contains(&second_incoming.id));
+        assert!(history.balance() == balance.checked_add(balance).unwrap());
+        assert!(incoming.len() == 2);
+        assert!(incoming[1] == second_incoming);
+        assert!(outgoing.len() == 0);
+        assert!(history.next_version() == 0);
         assert!(is_sequential.is_ok() && is_sequential.unwrap());
     }
 
