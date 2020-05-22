@@ -27,7 +27,7 @@ impl History {
         let _ = transfer_ids.insert(first.id);
         Self {
             id: first.to,
-            balance: Money::zero(),
+            balance: first.amount,
             incoming: vec![first],
             outgoing: Default::default(),
             transfer_ids,
@@ -67,9 +67,8 @@ impl History {
     /// NB: This is not guaranteed to give you all unknown to you,
     /// since there is no absolute order on the incoming!
     pub fn incoming_since(&self, index: usize) -> Vec<Transfer> {
-        let include_index = index + 1;
-        if self.incoming.len() > include_index {
-            self.incoming.split_at(include_index).1.to_vec()
+        if self.incoming.len() > index {
+            self.incoming.split_at(index).1.to_vec()
         } else {
             vec![]
         }
@@ -77,9 +76,8 @@ impl History {
 
     /// Query for new outgoing transfers since specified index.
     pub fn outgoing_since(&self, index: usize) -> Vec<Transfer> {
-        let include_index = index + 1;
-        if self.outgoing.len() > include_index {
-            self.outgoing.split_at(include_index).1.to_vec()
+        if self.outgoing.len() > index {
+            self.outgoing.split_at(index).1.to_vec()
         } else {
             vec![]
         }
@@ -104,5 +102,124 @@ impl History {
         } else {
             panic!("Transfer does not belong to this history")
         }
+    }
+}
+
+mod test {
+    use super::*;
+    use crdts::Dot;
+    use safe_nd::{PublicKey, XorName};
+    use threshold_crypto::SecretKey;
+
+    #[test]
+    fn creates_with_ctor_state() {
+        // Arrange
+        let balance = Money::from_nano(10);
+        let first_incoming = Transfer {
+            id: Dot::new(get_random_pk(), 0),
+            to: get_random_pk(),
+            amount: balance,
+        };
+
+        // Act
+        let history = History::new(first_incoming.clone());
+        let incoming = history.incoming_since(0);
+        let outgoing = history.outgoing_since(0);
+        let first_outgoing = Transfer {
+            id: Dot::new(first_incoming.to, 0),
+            to: get_random_pk(),
+            amount: balance,
+        };
+        let is_sequential = history.is_sequential(&first_outgoing);
+
+        // Assert
+        assert!(history.contains(&first_incoming.id));
+        assert!(history.balance() == balance);
+        assert!(incoming.len() == 1);
+        assert!(incoming[0] == first_incoming);
+        assert!(outgoing.len() == 0);
+        assert!(history.next_version() == 0);
+        assert!(is_sequential.is_ok() && is_sequential.unwrap());
+    }
+
+    #[test]
+    fn appends_outgoing() {
+        // Arrange
+        let balance = Money::from_nano(10);
+        let first_incoming = Transfer {
+            id: Dot::new(get_random_pk(), 0),
+            to: get_random_pk(),
+            amount: balance,
+        };
+        let mut history = History::new(first_incoming.clone());
+        let first_outgoing = Transfer {
+            id: Dot::new(first_incoming.to, 0),
+            to: get_random_pk(),
+            amount: balance,
+        };
+
+        // Act
+        history.append(first_outgoing.clone());
+        let incoming = history.incoming_since(0);
+        let outgoing = history.outgoing_since(0);
+        let is_sequential = history.is_sequential(&Transfer {
+            id: Dot::new(first_incoming.to, 1),
+            to: get_random_pk(),
+            amount: balance,
+        });
+
+        // Assert
+        assert!(history.contains(&first_outgoing.id));
+        assert!(history.balance() == Money::zero());
+        assert!(outgoing.len() == 1);
+        assert!(outgoing[0] == first_outgoing);
+        assert!(incoming.len() == 1);
+        assert!(incoming[0] == first_incoming);
+        assert!(history.next_version() == 1);
+        assert!(is_sequential.is_ok() && is_sequential.unwrap());
+    }
+
+    #[test]
+    fn appends_incoming() {
+        // Arrange
+        let balance = Money::from_nano(10);
+        let first_incoming = Transfer {
+            id: Dot::new(get_random_pk(), 0),
+            to: get_random_pk(),
+            amount: balance,
+        };
+        let mut history = History::new(first_incoming.clone());
+        let second_incoming = Transfer {
+            id: Dot::new(get_random_pk(), 0),
+            to: first_incoming.to,
+            amount: balance,
+        };
+
+        // Act
+        history.append(second_incoming.clone());
+        let incoming = history.incoming_since(0);
+        let outgoing = history.outgoing_since(0);
+        let is_sequential = history.is_sequential(&Transfer {
+            id: Dot::new(first_incoming.to, 0),
+            to: get_random_pk(),
+            amount: balance,
+        });
+
+        // Assert
+        assert!(history.contains(&second_incoming.id));
+        assert!(history.balance() == balance.checked_add(balance).unwrap());
+        assert!(incoming.len() == 2);
+        assert!(incoming[1] == second_incoming);
+        assert!(outgoing.len() == 0);
+        assert!(history.next_version() == 0);
+        assert!(is_sequential.is_ok() && is_sequential.unwrap());
+    }
+
+    fn get_random_xor() -> XorName {
+        XorName::from(get_random_pk())
+    }
+
+    fn get_random_pk() -> PublicKey {
+        PublicKey::from(SecretKey::random().public_key())
     }
 }
