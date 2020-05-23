@@ -15,28 +15,28 @@ use std::collections::HashSet;
 pub struct History {
     id: Identity,
     balance: Money,
-    incoming: Vec<Transfer>,
-    outgoing: Vec<Transfer>,
+    credits: Vec<Transfer>,
+    debits: Vec<Transfer>,
     transfer_ids: HashSet<TransferId>,
 }
 
 impl History {
-    /// Creates a new history, requires an incoming transfer.
+    /// Creates a new history, requires an credits transfer.
     pub fn new(first: Transfer) -> Self {
         let mut transfer_ids = HashSet::new();
         let _ = transfer_ids.insert(first.id);
         Self {
             id: first.to,
             balance: first.amount,
-            incoming: vec![first],
-            outgoing: Default::default(),
+            credits: vec![first],
+            debits: Default::default(),
             transfer_ids,
         }
     }
 
     /// Query for next version.
     pub fn next_version(&self) -> u64 {
-        self.outgoing.len() as u64
+        self.debits.len() as u64
     }
 
     /// Query for balance.
@@ -49,35 +49,35 @@ impl History {
         self.transfer_ids.contains(id)
     }
 
-    /// Zero based indexing, first (outgoing) transfer will be nr 0
-    /// (we could just as well just compare outgoing.len()..)
+    /// Zero based indexing, first (debits) transfer will be nr 0
+    /// (we could just as well just compare debits.len()..)
     pub fn is_sequential(&self, transfer: &Transfer) -> Result<bool> {
         let id = transfer.id;
         if id.actor != self.id {
             Err(Error::InvalidOperation)
         } else {
-            match self.outgoing.last() {
-                None => Ok(id.counter == 0), // if not outgoing transfers have been made, transfer counter must be 0
+            match self.debits.last() {
+                None => Ok(id.counter == 0), // if not debits transfers have been made, transfer counter must be 0
                 Some(previous) => Ok(previous.id.counter + 1 == id.counter),
             }
         }
     }
 
-    /// Query for new incoming transfers since specified index.
+    /// Query for new credits transfers since specified index.
     /// NB: This is not guaranteed to give you all unknown to you,
-    /// since there is no absolute order on the incoming!
-    pub fn incoming_since(&self, index: usize) -> Vec<Transfer> {
-        if self.incoming.len() > index {
-            self.incoming.split_at(index).1.to_vec()
+    /// since there is no absolute order on the credits!
+    pub fn credits_since(&self, index: usize) -> Vec<Transfer> {
+        if self.credits.len() > index {
+            self.credits.split_at(index).1.to_vec()
         } else {
             vec![]
         }
     }
 
-    /// Query for new outgoing transfers since specified index.
-    pub fn outgoing_since(&self, index: usize) -> Vec<Transfer> {
-        if self.outgoing.len() > index {
-            self.outgoing.split_at(index).1.to_vec()
+    /// Query for new debits transfers since specified index.
+    pub fn debits_since(&self, index: usize) -> Vec<Transfer> {
+        if self.debits.len() > index {
+            self.debits.split_at(index).1.to_vec()
         } else {
             vec![]
         }
@@ -91,14 +91,14 @@ impl History {
                 None => panic!("overflow when subtracting!"),
             }
             let _ = self.transfer_ids.insert(transfer.id);
-            self.outgoing.push(transfer);
+            self.debits.push(transfer);
         } else if self.id == transfer.to {
             match self.balance.checked_add(transfer.amount) {
                 Some(amount) => self.balance = amount,
                 None => panic!("overflow when adding!"),
             }
             let _ = self.transfer_ids.insert(transfer.id);
-            self.incoming.push(transfer);
+            self.credits.push(transfer);
         } else {
             panic!("Transfer does not belong to this history")
         }
@@ -115,102 +115,102 @@ mod test {
     fn creates_with_ctor_state() {
         // Arrange
         let balance = Money::from_nano(10);
-        let first_incoming = Transfer {
+        let first_credits = Transfer {
             id: Dot::new(get_random_pk(), 0),
             to: get_random_pk(),
             amount: balance,
         };
 
         // Act
-        let history = History::new(first_incoming.clone());
-        let incoming = history.incoming_since(0);
-        let outgoing = history.outgoing_since(0);
-        let first_outgoing = Transfer {
-            id: Dot::new(first_incoming.to, 0),
+        let history = History::new(first_credits.clone());
+        let credits = history.credits_since(0);
+        let debits = history.debits_since(0);
+        let first_debits = Transfer {
+            id: Dot::new(first_credits.to, 0),
             to: get_random_pk(),
             amount: balance,
         };
-        let is_sequential = history.is_sequential(&first_outgoing);
+        let is_sequential = history.is_sequential(&first_debits);
 
         // Assert
-        assert!(history.contains(&first_incoming.id));
+        assert!(history.contains(&first_credits.id));
         assert!(history.balance() == balance);
-        assert!(incoming.len() == 1);
-        assert!(incoming[0] == first_incoming);
-        assert!(outgoing.len() == 0);
+        assert!(credits.len() == 1);
+        assert!(credits[0] == first_credits);
+        assert!(debits.len() == 0);
         assert!(history.next_version() == 0);
         assert!(is_sequential.is_ok() && is_sequential.unwrap());
     }
 
     #[test]
-    fn appends_outgoing() {
+    fn appends_debits() {
         // Arrange
         let balance = Money::from_nano(10);
-        let first_incoming = Transfer {
+        let first_credits = Transfer {
             id: Dot::new(get_random_pk(), 0),
             to: get_random_pk(),
             amount: balance,
         };
-        let mut history = History::new(first_incoming.clone());
-        let first_outgoing = Transfer {
-            id: Dot::new(first_incoming.to, 0),
+        let mut history = History::new(first_credits.clone());
+        let first_debits = Transfer {
+            id: Dot::new(first_credits.to, 0),
             to: get_random_pk(),
             amount: balance,
         };
 
         // Act
-        history.append(first_outgoing.clone());
-        let incoming = history.incoming_since(0);
-        let outgoing = history.outgoing_since(0);
+        history.append(first_debits.clone());
+        let credits = history.credits_since(0);
+        let debits = history.debits_since(0);
         let is_sequential = history.is_sequential(&Transfer {
-            id: Dot::new(first_incoming.to, 1),
+            id: Dot::new(first_credits.to, 1),
             to: get_random_pk(),
             amount: balance,
         });
 
         // Assert
-        assert!(history.contains(&first_outgoing.id));
+        assert!(history.contains(&first_debits.id));
         assert!(history.balance() == Money::zero());
-        assert!(outgoing.len() == 1);
-        assert!(outgoing[0] == first_outgoing);
-        assert!(incoming.len() == 1);
-        assert!(incoming[0] == first_incoming);
+        assert!(debits.len() == 1);
+        assert!(debits[0] == first_debits);
+        assert!(credits.len() == 1);
+        assert!(credits[0] == first_credits);
         assert!(history.next_version() == 1);
         assert!(is_sequential.is_ok() && is_sequential.unwrap());
     }
 
     #[test]
-    fn appends_incoming() {
+    fn appends_credits() {
         // Arrange
         let balance = Money::from_nano(10);
-        let first_incoming = Transfer {
+        let first_credits = Transfer {
             id: Dot::new(get_random_pk(), 0),
             to: get_random_pk(),
             amount: balance,
         };
-        let mut history = History::new(first_incoming.clone());
-        let second_incoming = Transfer {
+        let mut history = History::new(first_credits.clone());
+        let second_credits = Transfer {
             id: Dot::new(get_random_pk(), 0),
-            to: first_incoming.to,
+            to: first_credits.to,
             amount: balance,
         };
 
         // Act
-        history.append(second_incoming.clone());
-        let incoming = history.incoming_since(0);
-        let outgoing = history.outgoing_since(0);
+        history.append(second_credits.clone());
+        let credits = history.credits_since(0);
+        let debits = history.debits_since(0);
         let is_sequential = history.is_sequential(&Transfer {
-            id: Dot::new(first_incoming.to, 0),
+            id: Dot::new(first_credits.to, 0),
             to: get_random_pk(),
             amount: balance,
         });
 
         // Assert
-        assert!(history.contains(&second_incoming.id));
+        assert!(history.contains(&second_credits.id));
         assert!(history.balance() == balance.checked_add(balance).unwrap());
-        assert!(incoming.len() == 2);
-        assert!(incoming[1] == second_incoming);
-        assert!(outgoing.len() == 0);
+        assert!(credits.len() == 2);
+        assert!(credits[1] == second_credits);
+        assert!(debits.len() == 0);
         assert!(history.next_version() == 0);
         assert!(is_sequential.is_ok() && is_sequential.unwrap());
     }

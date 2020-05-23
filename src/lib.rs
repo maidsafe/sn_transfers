@@ -103,8 +103,11 @@ pub enum ActorEvent {
     /// for sending to Replicas.
     TransferRegistrationSent(TransferRegistrationSent),
     /// Raised when the Actor has received
-    /// unknown transfers on querying Replicas.
-    RemoteTransfersSynced(RemoteTransfersSynced),
+    /// unknown credits on querying Replicas.
+    RemoteCreditsSynced(RemoteCreditsSynced),
+    /// Raised when the Actor has received
+    /// unknown debits on querying Replicas.
+    RemoteDebitsSynced(RemoteDebitsSynced),
 }
 
 /// This event is raised by the Actor after having
@@ -135,11 +138,17 @@ pub struct TransferRegistrationSent {
 }
 
 /// Raised when the Actor has received
-/// unknown transfers on querying Replicas.
+/// unknown credits on querying Replicas.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct RemoteTransfersSynced {
-    /// credits
-    incoming: Vec<ProofOfAgreement>,
-    /// debits
-    outgoing: Vec<ProofOfAgreement>,
+pub struct RemoteCreditsSynced {
+    /// credits transfers.
+    credits: Vec<ProofOfAgreement>,
+}
+
+/// Raised when the Actor has received
+/// unknown debits on querying Replicas.
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+pub struct RemoteDebitsSynced {
+    /// debits transfers.
+    debits: Vec<ProofOfAgreement>,
 }
