@@ -7,14 +7,13 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::{
-    history::History, ActorEvent, Identity, RemoteCreditsSynced, RemoteDebitsSynced,
-    TransferInitiated, TransferRegistrationSent, TransferValidationReceived,
+    history::History, ActorEvent, CreditAgreementProof, DebitAgreementProof, Identity,
+    RegisterTransfer, RemoteCreditsSynced, RemoteDebitsSynced, SignatureShare, SignedCredit,
+    Transfer, TransferInitiated, TransferRegistrationSent, TransferValidated,
+    TransferValidationReceived, ValidateTransfer,
 };
 use crdts::Dot;
-use safe_nd::{
-    ClientFullId, Error, Money, ProofOfAgreement, RegisterTransfer, Result, Signature, Transfer,
-    TransferValidated, ValidateTransfer,
-};
+use safe_nd::{ClientFullId, Error, Money, Result, Signature};
 use std::collections::{BTreeMap, HashSet};
 use threshold_crypto::PublicKeySet;
 
@@ -26,6 +25,8 @@ pub struct SecretKeyShare {
     /// Replica signature over the transfer cmd.
     pub secret_key: threshold_crypto::SecretKeyShare,
 }
+
+type TransferIdHash = Vec<u8>;
 
 /// The Actor is the part of an AT2 system
 /// that initiates transfers, by requesting Replicas
@@ -39,12 +40,14 @@ pub struct Actor {
     history: History,
     /// Ensures that the actor's transfer
     /// initiations (ValidateTransfer cmd) are sequential.
-    current_transfer_version: Option<u64>,
+    current_debit_version: Option<u64>,
     /// When a transfer is initiated, validations are accumulated here.
     /// After quorum is reached and proof produced, the set is cleared.
     accumulating_validations: BTreeMap<PublicKeySet, HashSet<TransferValidated>>,
-    /// The PK Set history of the Replicas
-    replica_key_history: HashSet<PublicKeySet>,
+    /// The PK Set of the Replicas
+    replicas: PublicKeySet,
+    /// In progress syncing of remote credits.
+    accumulating_remote_credits: BTreeMap<TransferIdHash, HashSet<SignedCredit>>,
 }
 
 impl Actor {
@@ -61,17 +64,20 @@ impl Actor {
         if id != transfer.to {
             return None;
         }
-        let mut replica_key_history = HashSet::new();
-        let _ = replica_key_history.insert(replicas);
         Some(Actor {
             id: transfer.to,
             client_id,
-            replica_key_history,
+            replicas,
             history: History::new(transfer),
-            current_transfer_version: None,
+            current_debit_version: None,
             accumulating_validations: Default::default(),
+            accumulating_remote_credits: Default::default(),
         })
     }
+
+    /// -----------------------------------------------------------------
+    /// ---------------------- Queries ----------------------------------
+    /// -----------------------------------------------------------------
 
     /// Query for new credits since specified index.
     /// NB: This is not guaranteed to give you all unknown to you,
@@ -90,27 +96,31 @@ impl Actor {
         self.history.balance()
     }
 
+    /// -----------------------------------------------------------------
+    /// ---------------------- Cmds -------------------------------------
+    /// -----------------------------------------------------------------
+
     /// Step 1. Build a valid cmd for validation of a debit.
     pub fn initiate(&self, amount: Money, to: Identity) -> Result<TransferInitiated> {
         if to == self.id {
             return Err(Error::InvalidOperation); // "Sender and recipient are the same"
         }
 
-        let id = Dot::new(self.id, self.history.next_version());
+        let id = Dot::new(self.id, self.history.next_debit());
 
-        match self.current_transfer_version {
+        match self.current_debit_version {
             None => {
                 if id.counter != 0 {
                     return Err(Error::InvalidOperation); // "out of order msg"
                 }
             }
-            Some(current_version) => {
-                let next_version = current_version + 1;
-                if next_version != self.history.next_version() {
+            Some(current_debit) => {
+                let next_debit = current_debit + 1;
+                if next_debit != self.history.next_debit() {
                     // ensures one debit is completed at a time
                     return Err(Error::InvalidOperation); // "current pending debit has not been completed"
                 }
-                if next_version != id.counter {
+                if next_debit != id.counter {
                     return Err(Error::InvalidOperation); // "either already proposed or out of order debit"
                 }
             }
@@ -121,10 +131,10 @@ impl Actor {
         }
         let transfer = Transfer { id, to, amount };
         match self.sign(&transfer) {
-            Ok(signature) => {
+            Ok(actor_signature) => {
                 let cmd = ValidateTransfer {
                     transfer,
-                    actor_signature: signature,
+                    actor_signature,
                 };
                 Ok(TransferInitiated { cmd })
             }
@@ -144,10 +154,10 @@ impl Actor {
             return Err(Error::InvalidOperation); // "validation is not intended for this actor"
         }
         // check if expected this validation
-        match self.current_transfer_version {
+        match self.current_debit_version {
             None => return Err(Error::InvalidOperation), // "there is no pending transfer, cannot receive validations"
-            Some(counter) => {
-                if counter != transfer_cmd.transfer.id.counter {
+            Some(version) => {
+                if version != transfer_cmd.transfer.id.counter {
                     return Err(Error::InvalidOperation); // "out of order validation"
                 }
             }
@@ -178,7 +188,7 @@ impl Actor {
                     let sig_shares: BTreeMap<_, _> = accumulated
                         .into_iter()
                         .map(|v| v.replica_signature)
-                        .map(|s| (s.index, s.signature))
+                        .map(|s| (s.index, s.share))
                         .collect();
 
                     if let Ok(data) = bincode::serialize(&transfer_cmd) {
@@ -188,9 +198,9 @@ impl Actor {
                             .expect("not enough shares");
                         // Validate the main signature. If the shares were valid, this can't fail.
                         if replicas.public_key().verify(&sig, data) {
-                            proof = Some(ProofOfAgreement {
+                            proof = Some(DebitAgreementProof {
                                 transfer_cmd: transfer_cmd.clone(),
-                                section_sig: safe_nd::Signature::Bls(sig),
+                                sender_replicas_sig: safe_nd::Signature::Bls(sig),
                             });
                         } // else, we have some corrupt data
                     };
@@ -202,7 +212,7 @@ impl Actor {
     }
 
     /// Step 3. Build a valid cmd for registration of an agreed transfer.
-    pub fn register(&self, proof: ProofOfAgreement) -> Result<TransferRegistrationSent> {
+    pub fn register(&self, proof: DebitAgreementProof) -> Result<TransferRegistrationSent> {
         // Always verify signature first! (as to not leak any information).
         if !self.verify_debits_proof(&proof).is_ok() {
             return Err(Error::InvalidSignature);
@@ -224,18 +234,73 @@ impl Actor {
     /// Step xx. Continuous syncing from Replicas ensure
     /// that we receive transfers initiated at other Actor instances (same id or other).
     /// This can be push or pull model, decided by upper layer.
-    pub fn sync_credits(&self, proofs: Vec<ProofOfAgreement>) -> Result<RemoteCreditsSynced> {
-        let valid_credits = proofs
+    pub fn sync_credits(&self, proofs: Vec<SignedCredit>) -> Result<RemoteCreditsSynced> {
+        let mut accumulating_credits = proofs
             .iter()
-            .filter(|p| self.id == p.transfer_cmd.transfer.to)
-            .filter(|p| !self.history.contains(&p.transfer_cmd.transfer.id))
-            .filter(|p| self.verify_credits_proof(p).is_ok())
+            .filter(|p| self.id == p.debit_proof.transfer_cmd.transfer.to)
+            .filter(|p| {
+                !self
+                    .history
+                    .contains(&p.debit_proof.transfer_cmd.transfer.id)
+            })
+            .filter(|p| self.verify_credit(p).is_ok())
+            .filter(|p| {
+                // check not already added
+                let transfer_id_hash = vec![];
+                match self.accumulating_remote_credits.get(&transfer_id_hash) {
+                    None => true,
+                    Some(set) => !set.contains(p),
+                }
+            })
             .map(|p| p.clone())
-            .collect::<Vec<ProofOfAgreement>>();
+            .collect::<Vec<SignedCredit>>();
 
-        if valid_credits.len() > 0 {
+        let mut accumulated_credit_proofs = vec![];
+        let threshold = self.replicas.threshold();
+        for credit in &accumulating_credits {
+            let transfer_id_hash = vec![];
+            match self.accumulating_remote_credits.get(&transfer_id_hash) {
+                None => continue,
+                Some(set) => {
+                    let quorum = set.len() == threshold;
+                    if quorum {
+                        let mut accumulated = set.clone();
+                        let _ = accumulated.insert(credit.clone());
+                        // collect sig shares
+                        let sig_shares: BTreeMap<_, _> = accumulated
+                            .into_iter()
+                            .map(|v| v.receiver_replica_sig)
+                            .map(|s| (s.index, s.share))
+                            .collect();
+
+                        if let Ok(data) = bincode::serialize(&credit.debit_proof) {
+                            // Combine shares to produce the main signature.
+                            let sig = self
+                                .replicas
+                                .combine_signatures(&sig_shares)
+                                .expect("not enough shares");
+                            // Validate the main signature. If the shares were valid, this can't fail.
+                            if self.replicas.public_key().verify(&sig, data) {
+                                accumulated_credit_proofs.push(CreditAgreementProof {
+                                    debit_proof: credit.debit_proof.clone(),
+                                    receiver_replica_sig: safe_nd::Signature::Bls(sig),
+                                });
+                            } // else, we have some corrupt data
+                        };
+                    }
+                }
+            }
+        }
+
+        // TODO: Remove from accumulating_credits where we have a proof.
+
+        let any_valid_credits =
+            accumulating_credits.len() > 0 || accumulated_credit_proofs.len() > 0;
+
+        if any_valid_credits {
             Ok(RemoteCreditsSynced {
-                credits: valid_credits,
+                accumulating_credits,
+                accumulated_credit_proofs,
             })
         } else {
             Err(Error::InvalidOperation)
@@ -246,16 +311,12 @@ impl Actor {
     /// that we receive transfers initiated at other Actor instances (same id or other).
     /// This can be push or pull model, decided by upper layer.
     /// With multiple devices we can also sync debits made on other devices.
-    pub fn sync_debits(
-        &self,
-        credits: Vec<ProofOfAgreement>,
-        debits: Vec<ProofOfAgreement>,
-    ) -> Result<RemoteDebitsSynced> {
+    pub fn sync_debits(&self, debits: Vec<DebitAgreementProof>) -> Result<RemoteDebitsSynced> {
         let mut debits = debits
             .iter()
             .filter(|p| self.id == p.transfer_cmd.transfer.id.actor)
             .filter(|p| self.verify_debits_proof(p).is_ok())
-            .collect::<Vec<&ProofOfAgreement>>();
+            .collect::<Vec<&DebitAgreementProof>>();
 
         debits.sort_by_key(|t| t.transfer_cmd.transfer.id.counter);
 
@@ -263,7 +324,7 @@ impl Actor {
         let mut valid_debits = vec![];
         for out in debits {
             let version = out.transfer_cmd.transfer.id.counter;
-            let expected_version = iter + self.history.next_version();
+            let expected_version = iter + self.history.next_debit();
             if version != expected_version {
                 break; // since it's sorted, if first is not matching, then no point continuing
             }
@@ -280,6 +341,10 @@ impl Actor {
         }
     }
 
+    /// -----------------------------------------------------------------
+    /// ---------------------- Mutation ---------------------------------
+    /// -----------------------------------------------------------------
+
     /// Mutation of state.
     /// There is no validation of an event, it is assumed to have
     /// been properly validated before raised, and thus anything that breaks is a bug.
@@ -287,14 +352,12 @@ impl Actor {
         match event {
             ActorEvent::TransferInitiated(e) => {
                 let transfer = e.cmd.transfer;
-                self.current_transfer_version = Some(transfer.id.counter);
+                self.current_debit_version = Some(transfer.id.counter);
             }
             ActorEvent::TransferValidationReceived(e) => {
                 if let Some(_) = e.proof {
                     // if we have a proof, then we have a valid set of replicas (potentially new) to update with
-                    let _ = self
-                        .replica_key_history
-                        .insert(e.validation.replicas.clone());
+                    self.replicas = e.validation.replicas.clone();
                 }
                 match self
                     .accumulating_validations
@@ -319,8 +382,24 @@ impl Actor {
                 self.accumulating_validations.clear();
             }
             ActorEvent::RemoteCreditsSynced(e) => {
-                for proof in e.credits {
-                    self.history.append(proof.transfer_cmd.transfer);
+                for credit in e.accumulating_credits {
+                    let hash = vec![]; // hash(credit.debit_proof.transfer_cmd.transfer.id)
+                    match self.accumulating_remote_credits.get_mut(&hash) {
+                        Some(set) => {
+                            let _ = set.insert(credit.clone());
+                        }
+                        None => {
+                            // Creates if not exists.
+                            let mut set = HashSet::new();
+                            let _ = set.insert(credit.clone());
+                            let _ = self.accumulating_remote_credits.insert(hash, set);
+                        }
+                    }
+                }
+                for proof in e.accumulated_credit_proofs {
+                    self.history.append(proof.debit_proof.transfer_cmd.transfer); // append credit
+                    let hash = vec![]; // hash(credit.debit_proof.transfer_cmd.transfer.id)
+                    let _ = self.accumulating_remote_credits.remove(&hash); // clear accumulation of the credit
                 }
             }
             ActorEvent::RemoteDebitsSynced(e) => {
@@ -331,6 +410,10 @@ impl Actor {
         };
         // consider event log, to properly be able to reconstruct state from restart
     }
+
+    /// -----------------------------------------------------------------
+    /// ---------------------- Private methods --------------------------
+    /// -----------------------------------------------------------------
 
     fn sign(&self, transfer: &Transfer) -> Result<Signature> {
         match bincode::serialize(transfer) {
@@ -350,18 +433,24 @@ impl Actor {
             return error;
         }
 
-        // Check that the replica signature is valid per the provided public key set.
-        let replica_signature = &event.replica_signature.signature;
-        let share_index = event.replica_signature.index;
-        match bincode::serialize(&cmd) {
-            Err(_) => Err(Error::NetworkOther(
-                "Could not serialise transfer cmd".into(),
-            )),
+        self.verify_share(cmd, &event.replica_signature, &event.replicas)
+    }
+
+    // Check that the replica signature is valid per the provided public key set.
+    fn verify_share<T: serde::Serialize>(
+        &self,
+        item: T,
+        replica_signature: &SignatureShare,
+        replicas: &PublicKeySet,
+    ) -> Result<()> {
+        let sig_share = &replica_signature.share;
+        let share_index = replica_signature.index;
+        match bincode::serialize(&item) {
+            Err(_) => Err(Error::NetworkOther("Could not serialise item".into())),
             Ok(data) => {
-                let verified = event
-                    .replicas
+                let verified = replicas
                     .public_key_share(share_index)
-                    .verify(replica_signature, data);
+                    .verify(sig_share, data);
                 if verified {
                     Ok(())
                 } else {
@@ -371,8 +460,8 @@ impl Actor {
         }
     }
 
-    /// Verify that this is a valid ProofOfAgreement over our cmd.
-    fn verify_debits_proof(&self, proof: &ProofOfAgreement) -> Result<()> {
+    /// Verify that this is a valid DebitAgreementProof over our cmd.
+    fn verify_debits_proof(&self, proof: &DebitAgreementProof) -> Result<()> {
         let cmd = &proof.transfer_cmd;
         // Check that we signed this.
         if let error @ Err(_) = self.verify_is_our_transfer(cmd) {
@@ -383,32 +472,19 @@ impl Actor {
         match bincode::serialize(&proof.transfer_cmd) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
-                for set in &self.replica_key_history {
-                    let public_key = safe_nd::PublicKey::Bls(set.public_key());
-                    let result = public_key.verify(&proof.section_sig, &data);
-                    if result.is_ok() {
-                        return result;
-                    }
-                }
-                Err(Error::InvalidSignature)
+                let public_key = safe_nd::PublicKey::Bls(self.replicas.public_key());
+                public_key.verify(&proof.sender_replicas_sig, &data)
             }
         }
     }
 
-    /// Verify that this is a valid ProofOfAgreement.
-    fn verify_credits_proof(&self, proof: &ProofOfAgreement, replicas: PublicKeySet) -> Result<()> {
-        // Check that the proof corresponds to the public key set of some remote Replicas.
-        match bincode::serialize(&proof.transfer_cmd) {
-            Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
-            Ok(data) => {
-                let public_key = safe_nd::PublicKey::Bls(replicas.public_key());
-                let result = public_key.verify(&proof.section_sig, &data);
-                if result.is_ok() {
-                    return result;
-                }
-                Err(Error::InvalidSignature)
-            }
-        }
+    /// Verify that this is a valid SignedCredit.
+    fn verify_credit(&self, proof: &SignedCredit) -> Result<()> {
+        self.verify_share(
+            &proof.debit_proof,
+            &proof.receiver_replica_sig,
+            &self.replicas,
+        )
     }
 
     /// Check that we signed this.

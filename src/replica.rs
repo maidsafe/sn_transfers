@@ -7,16 +7,15 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::{
-    history::History, Identity, KnownGroupAdded, PeersChanged, ReplicaEvent, TransferPropagated,
+    history::History, DebitAgreementProof, Identity, KnownGroupAdded, PeersChanged, ReplicaEvent,
+    SignatureShare, Transfer, TransferPropagated, TransferRegistered, TransferValidated,
+    ValidateTransfer,
 };
 use crdts::{CmRDT, VClock};
 use std::collections::{HashMap, HashSet};
 
-use safe_nd::{
-    Error, Money, ProofOfAgreement, Result, Signature, Transfer, TransferRegistered,
-    TransferValidated, ValidateTransfer,
-};
-use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKeyShare, SignatureShare};
+use safe_nd::{Error, Money, Result};
+use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKeyShare};
 
 /// The Replica is the part of an AT2 system
 /// that forms validating groups, and signs individual
@@ -98,16 +97,16 @@ impl Replica {
     /// ---------------------- Cmds -------------------------------------
     /// -----------------------------------------------------------------
 
-    /// This is the one and only infusion of money to the system. Ever.
-    /// It is carried out by the first node in the network.
-    /// WIP
-    pub fn genesis(&self, proof: ProofOfAgreement) -> Result<TransferPropagated> {
-        // genesis must be the first
-        if self.histories.len() > 0 {
-            return Err(Error::InvalidOperation);
-        }
-        Ok(TransferPropagated { proof })
-    }
+    // /// This is the one and only infusion of money to the system. Ever.
+    // /// It is carried out by the first node in the network.
+    // /// WIP
+    // pub fn genesis(&self, proof: DebitAgreementProof) -> Result<TransferPropagated> {
+    //     // genesis must be the first
+    //     if self.histories.len() > 0 {
+    //         return Err(Error::InvalidOperation);
+    //     }
+    //     Ok(TransferPropagated { debit_proof, replica_sig })
+    // }
 
     /// On peer composition change we get a new PublicKeySet.
     pub fn set_peers(&self, peers: PublicKeySet) -> Result<PeersChanged> {
@@ -134,7 +133,7 @@ impl Replica {
         if id.actor == transfer_cmd.transfer.to {
             Err(Error::InvalidOperation)
         } else {
-            match self.sign(&transfer_cmd) {
+            match self.sign_cmd(&transfer_cmd) {
                 Err(_) => Err(Error::InvalidSignature),
                 Ok(replica_signature) => Ok(TransferValidated {
                     transfer_cmd,
@@ -173,7 +172,7 @@ impl Replica {
             None => return Err(Error::NoSuchSender), //"From account doesn't exist"
         }
 
-        match self.sign(&cmd) {
+        match self.sign_cmd(&cmd) {
             Err(_) => Err(Error::InvalidSignature),
             Ok(replica_signature) => Ok(TransferValidated {
                 transfer_cmd: cmd,
@@ -184,19 +183,19 @@ impl Replica {
     }
 
     /// Step 2. Validation of agreement, and order at debit source.
-    pub fn register(&self, proof: ProofOfAgreement) -> Result<TransferRegistered> {
+    pub fn register(&self, debit_proof: DebitAgreementProof) -> Result<TransferRegistered> {
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_registered_proof(&proof).is_ok() {
+        if !self.verify_registered_proof(&debit_proof).is_ok() {
             return Err(Error::InvalidSignature);
         }
-        let transfer = &proof.transfer_cmd.transfer;
+        let transfer = &debit_proof.transfer_cmd.transfer;
         let sender = self.histories.get(&transfer.id.actor);
         match sender {
             None => Err(Error::NoSuchSender),
             Some(history) => match history.is_sequential(transfer) {
                 Ok(is_sequential) => {
                     if is_sequential {
-                        Ok(TransferRegistered { proof })
+                        Ok(TransferRegistered { debit_proof })
                     } else {
                         Err(Error::InvalidOperation) // "Non-sequential operation"
                     }
@@ -208,12 +207,15 @@ impl Replica {
 
     /// Step 3. Validation of agreement, and idempotency at credit destination.
     /// (Since this leads to a credit, there is no requirement on order.)
-    pub fn propagate(&self, proof: ProofOfAgreement) -> Result<TransferPropagated> {
+    pub fn receive_propagated(
+        &self,
+        debit_proof: DebitAgreementProof,
+    ) -> Result<TransferPropagated> {
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_propagated_proof(&proof).is_ok() {
+        if !self.verify_propagated_proof(&debit_proof).is_ok() {
             return Err(Error::InvalidSignature);
         }
-        let transfer = &proof.transfer_cmd.transfer;
+        let transfer = &debit_proof.transfer_cmd.transfer;
         let already_exists = match self.histories.get(&transfer.to) {
             None => false,
             Some(history) => history.contains(&transfer.id),
@@ -221,7 +223,13 @@ impl Replica {
         if already_exists {
             Err(Error::TransferIdExists)
         } else {
-            Ok(TransferPropagated { proof })
+            match self.sign_proof(&debit_proof) {
+                Err(_) => Err(Error::InvalidSignature),
+                Ok(replica_sig) => Ok(TransferPropagated {
+                    debit_proof,
+                    replica_sig,
+                }),
+            }
         }
     }
 
@@ -244,14 +252,14 @@ impl Replica {
                 self.pending_transfers.apply(transfer.id);
             }
             ReplicaEvent::TransferRegistered(e) => {
-                let transfer = e.proof.transfer_cmd.transfer;
+                let transfer = e.debit_proof.transfer_cmd.transfer;
                 self.histories
                     .get_mut(&transfer.id.actor)
                     .unwrap() // this is OK, since eventsourcing implies events are _facts_, you have a bug if it fails here..
                     .append(transfer);
             }
             ReplicaEvent::TransferPropagated(e) => {
-                let transfer = e.proof.transfer_cmd.transfer;
+                let transfer = e.debit_proof.transfer_cmd.transfer;
                 match self.histories.get_mut(&transfer.to) {
                     Some(history) => history.append(transfer),
                     None => {
@@ -269,12 +277,25 @@ impl Replica {
     /// -----------------------------------------------------------------
 
     ///
-    fn sign(&self, cmd: &ValidateTransfer) -> Result<safe_nd::SignatureShare> {
+    fn sign_cmd(&self, cmd: &ValidateTransfer) -> Result<SignatureShare> {
         match bincode::serialize(cmd) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
-            Ok(data) => Ok(safe_nd::SignatureShare {
+            Ok(data) => Ok(SignatureShare {
                 index: self.index,
-                signature: self.secret_key.sign(data),
+                share: self.secret_key.sign(data),
+            }),
+        }
+    }
+
+    /// Replicas of the credited Actor, sign the debit proof
+    /// for the Actor to aggregate and verify locally.
+    /// An alternative to this is to have the Actor know (and trust) all other Replica groups.
+    fn sign_proof(&self, proof: &DebitAgreementProof) -> Result<SignatureShare> {
+        match bincode::serialize(proof) {
+            Err(_) => Err(Error::NetworkOther("Could not serialise proof".into())),
+            Ok(data) => Ok(SignatureShare {
+                index: self.index,
+                share: self.secret_key.sign(data),
             }),
         }
     }
@@ -296,14 +317,14 @@ impl Replica {
 
     /// Verify that this is a valid _registered_
     /// ProofOfAgreement, i.e. signed by our peers.
-    fn verify_registered_proof(&self, proof: &ProofOfAgreement) -> Result<()> {
+    fn verify_registered_proof(&self, proof: &DebitAgreementProof) -> Result<()> {
         // Check that the proof corresponds to a public key set of our peer Replicas.
         match bincode::serialize(&proof.transfer_cmd) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
                 // Check if proof is signed by our peers.
                 let public_key = safe_nd::PublicKey::Bls(self.peers.public_key());
-                let result = public_key.verify(&proof.section_sig, &data);
+                let result = public_key.verify(&proof.sender_replicas_sig, &data);
                 if result.is_ok() {
                     return result;
                 }
@@ -315,7 +336,7 @@ impl Replica {
 
     /// Verify that this is a valid _propagated_
     // ProofOfAgreement, i.e. signed by a group that we know of.
-    fn verify_propagated_proof(&self, proof: &ProofOfAgreement) -> Result<()> {
+    fn verify_propagated_proof(&self, proof: &DebitAgreementProof) -> Result<()> {
         // Check that the proof corresponds to a public key set of some Replicas.
         match bincode::serialize(&proof.transfer_cmd) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
@@ -323,7 +344,7 @@ impl Replica {
                 // Check all known groups of peers.
                 for set in &self.other_groups {
                     let public_key = safe_nd::PublicKey::Bls(set.public_key());
-                    let result = public_key.verify(&proof.section_sig, &data);
+                    let result = public_key.verify(&proof.sender_replicas_sig, &data);
                     if result.is_ok() {
                         return result;
                     }
