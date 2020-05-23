@@ -35,10 +35,11 @@ pub use self::{
 };
 
 use safe_nd::{
-    ProofOfAgreement, PublicKey, RegisterTransfer, Transfer, TransferRegistered, TransferValidated,
+    ProofOfAgreement, PublicKey, RegisterTransfer, TransferRegistered, TransferValidated,
     ValidateTransfer,
 };
 use serde::{Deserialize, Serialize};
+use threshold_crypto::PublicKeySet;
 
 ///
 pub type Identity = PublicKey;
@@ -55,6 +56,28 @@ pub enum ReplicaEvent {
     /// The event raised when
     /// PropagateTransfer cmd has been successful.
     TransferPropagated(TransferPropagated),
+    /// The event raised when
+    /// peers changed so that we have a new PublicKeySet.
+    PeersChanged(PeersChanged),
+    /// The event raised when
+    /// we learn of a new group PK set.
+    KnownGroupAdded(KnownGroupAdded),
+}
+
+/// The Replica event raised when
+/// peers changed so that we have a new PublicKeySet.
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+pub struct PeersChanged {
+    /// Our new PublicKeySet.
+    pub peers: PublicKeySet,
+}
+
+/// The Replica event raised when
+/// we learn of a new group PK set.
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+pub struct KnownGroupAdded {
+    /// The PublicKeySet of the group.
+    pub group: PublicKeySet,
 }
 
 /// The Replica event raised when
