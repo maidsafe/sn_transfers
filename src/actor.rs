@@ -11,12 +11,21 @@ use super::{
     TransferRegistrationSent, TransferValidationReceived,
 };
 use crdts::Dot;
-use std::collections::HashSet;
-
 use safe_nd::{
     ClientFullId, Error, Money, ProofOfAgreement, RegisterTransfer, Result, Signature, Transfer,
     TransferValidated, ValidateTransfer,
 };
+use std::collections::{BTreeMap, HashSet};
+use threshold_crypto::PublicKeySet;
+
+/// A signature share, with its index in the combined collection.
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct SecretKeyShare {
+    /// Index in the combined collection.
+    pub index: usize,
+    /// Replica signature over the transfer cmd.
+    pub secret_key: threshold_crypto::SecretKeyShare,
+}
 
 /// The Actor is the part of an AT2 system
 /// that initiates transfers, by requesting Replicas
@@ -26,8 +35,8 @@ use safe_nd::{
 pub struct Actor {
     id: Identity,
     client_id: ClientFullId,
-    // /// The PK Set of the section
-    // pk_set: threshold_crypto::PublicKeySet, // temporary exclude
+    /// The PK Set history of the Replicas
+    replica_key_history: HashSet<PublicKeySet>,
     /// Set of all transfers impacting a given identity
     history: History,
     /// Ensures that the actor's transfer
@@ -35,7 +44,7 @@ pub struct Actor {
     current_transfer_version: Option<u64>,
     /// When a transfer is initiated, validations are accumulated here.
     /// After quorum is reached and proof produced, the set is cleared.
-    accumulating_validations: HashSet<TransferValidated>,
+    accumulating_validations: BTreeMap<PublicKeySet, HashSet<TransferValidated>>,
 }
 
 impl Actor {
@@ -43,15 +52,21 @@ impl Actor {
     /// Without it, there is no Actor, since there is no balance.
     /// There is no essential validations here, since without a valid transfer
     /// this Actor can't really convince Replicas to do anything.
-    pub fn get(client_id: ClientFullId, transfer: Transfer) -> Option<Actor> {
+    pub fn get(
+        client_id: ClientFullId,
+        transfer: Transfer,
+        replicas: PublicKeySet,
+    ) -> Option<Actor> {
         let id = *client_id.public_id().public_key();
         if id != transfer.to {
             return None;
         }
+        let mut replica_key_history = HashSet::new();
+        let _ = replica_key_history.insert(replicas);
         Some(Actor {
             id: transfer.to,
             client_id,
-            // pk_set, // temporary exclude
+            replica_key_history,
             history: History::new(transfer),
             current_transfer_version: None,
             accumulating_validations: Default::default(),
@@ -109,7 +124,7 @@ impl Actor {
             Ok(signature) => {
                 let cmd = ValidateTransfer {
                     transfer,
-                    client_signature: signature,
+                    actor_signature: signature,
                 };
                 Ok(TransferInitiated { cmd })
             }
@@ -120,33 +135,78 @@ impl Actor {
     /// Step 2. Receive validations from Replicas, aggregate the signatures.
     pub fn receive(&self, validation: TransferValidated) -> Result<TransferValidationReceived> {
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_validation(&validation) {
+        if !self.verify(&validation).is_ok() {
             return Err(Error::InvalidSignature);
         }
+        let transfer_cmd = &validation.transfer_cmd;
+        // check if validation was initiated by this actor
+        if self.id != transfer_cmd.transfer.id.actor {
+            return Err(Error::InvalidOperation); // "validation is not intended for this actor"
+        }
+        // check if expected this validation
         match self.current_transfer_version {
             None => return Err(Error::InvalidOperation), // "there is no pending transfer, cannot receive validations"
             Some(counter) => {
-                if counter != validation.transfer_cmd.transfer.id.counter {
+                if counter != transfer_cmd.transfer.id.counter {
                     return Err(Error::InvalidOperation); // "out of order validation"
                 }
             }
         }
-        if self.accumulating_validations.contains(&validation) {
-            return Err(Error::InvalidOperation); // "Already received validation"
+        // check if already received
+        for (_, validations) in &self.accumulating_validations {
+            if validations.contains(&validation) {
+                return Err(Error::InvalidOperation); // "Already received validation"
+            }
         }
 
-        // TODO: check if quorum validations, and construct the proof
+        let mut proof = None;
+        let accumulating_validations = &self.accumulating_validations;
+        let largest_group = accumulating_validations
+            .clone()
+            .into_iter()
+            .max_by_key(|c| c.1.len());
+        match largest_group {
+            None => (),
+            Some((replicas, accumulated)) => {
+                let threshold = replicas.threshold();
+                // If received validation is made by same set of replicas as this group,
+                // and the current count of accumulated is same as the threshold,
+                // then we have reached the quorum needed to build the proof. (Quorum = threshold + 1)
+                let quorum = accumulated.len() == threshold && replicas == validation.replicas;
+                if quorum {
+                    // collect sig shares
+                    let sig_shares: BTreeMap<_, _> = accumulated
+                        .into_iter()
+                        .map(|v| v.replica_signature)
+                        .map(|s| (s.index, s.signature))
+                        .collect();
 
-        Ok(TransferValidationReceived {
-            validation,
-            proof: None,
-        })
+                    if let Ok(data) = bincode::serialize(&transfer_cmd) {
+                        // Combine shares to produce the main signature.
+                        let sig = replicas
+                            .combine_signatures(&sig_shares)
+                            .expect("not enough shares");
+                        // Validate the main signature. If the shares were valid, this can't fail.
+                        if replicas.public_key().verify(&sig, data) {
+                            proof = Some(ProofOfAgreement {
+                                transfer_cmd: transfer_cmd.clone(),
+                                section_sig: safe_nd::Signature::Bls(sig),
+                            });
+                        } else {
+                            unreachable!() // this should be unreachable
+                        }
+                    };
+                }
+            }
+        }
+
+        Ok(TransferValidationReceived { validation, proof })
     }
 
     /// Step 3. Build a valid cmd for registration of an agreed transfer.
     pub fn register(&self, proof: ProofOfAgreement) -> Result<TransferRegistrationSent> {
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_proof(&proof) {
+        if !self.verify_proof(&proof).is_ok() {
             return Err(Error::InvalidSignature);
         }
         match self.history.is_sequential(&proof.transfer_cmd.transfer) {
@@ -173,7 +233,7 @@ impl Actor {
     ) -> Result<RemoteTransfersSynced> {
         let valid_incoming = incoming
             .iter()
-            .filter(|t| self.verify_proof(t))
+            .filter(|t| self.verify_proof(t).is_ok())
             .filter(|t| self.id == t.transfer_cmd.transfer.to)
             .filter(|t| !self.history.contains(&t.transfer_cmd.transfer.id))
             .map(|t| t.clone())
@@ -181,7 +241,7 @@ impl Actor {
 
         let mut outgoing = outgoing
             .iter()
-            .filter(|t| self.verify_proof(t))
+            .filter(|t| self.verify_proof(t).is_ok())
             .filter(|t| self.id == t.transfer_cmd.transfer.id.actor)
             .collect::<Vec<&ProofOfAgreement>>();
 
@@ -219,7 +279,28 @@ impl Actor {
                 self.current_transfer_version = Some(transfer.id.counter);
             }
             ActorEvent::TransferValidationReceived(e) => {
-                let _ = self.accumulating_validations.insert(e.validation);
+                if let Some(_) = e.proof {
+                    // if we have a proof, then we have a valid set of replicas (potentially new) to update with
+                    let _ = self
+                        .replica_key_history
+                        .insert(e.validation.replicas.clone());
+                }
+                match self
+                    .accumulating_validations
+                    .get_mut(&e.validation.replicas)
+                {
+                    Some(set) => {
+                        let _ = set.insert(e.validation.clone());
+                    }
+                    None => {
+                        // Creates if not exists.
+                        let mut set = HashSet::new();
+                        let _ = set.insert(e.validation.clone());
+                        let _ = self
+                            .accumulating_validations
+                            .insert(e.validation.replicas.clone(), set);
+                    }
+                }
             }
             ActorEvent::TransferRegistrationSent(e) => {
                 let transfer = e.cmd.proof.transfer_cmd.transfer;
@@ -245,11 +326,85 @@ impl Actor {
         }
     }
 
-    fn verify_validation(&self, event: &TransferValidated) -> bool {
-        unimplemented!()
+    /// We verify that we signed the underlying cmd,
+    /// and the replica signature against the pk set included in the event.
+    /// Note that we use the provided pk set to verify the event.
+    /// This might not be the way we want to do it.
+    fn verify(&self, event: &TransferValidated) -> Result<()> {
+        let cmd = &event.transfer_cmd;
+        // Check that we signed this.
+        if let error @ Err(_) = self.verify_is_our_transfer(cmd) {
+            return error;
+        }
+
+        // Check that the replica signature is valid per the provided public key set.
+        let replica_signature = &event.replica_signature.signature;
+        let share_index = event.replica_signature.index;
+        match bincode::serialize(&cmd) {
+            Err(_) => Err(Error::NetworkOther(
+                "Could not serialise transfer cmd".into(),
+            )),
+            Ok(data) => {
+                let verified = event
+                    .replicas
+                    .public_key_share(share_index)
+                    .verify(replica_signature, data);
+                if verified {
+                    Ok(())
+                } else {
+                    Err(Error::InvalidSignature)
+                }
+            }
+        }
     }
 
-    fn verify_proof(&self, proof: &ProofOfAgreement) -> bool {
-        unimplemented!()
+    /// Verify that this is a valid ProofOfAgreement over our cmd.
+    fn verify_proof(&self, proof: &ProofOfAgreement) -> Result<()> {
+        let cmd = &proof.transfer_cmd;
+        // Check that we signed this.
+        if let error @ Err(_) = self.verify_is_our_transfer(cmd) {
+            return error;
+        }
+
+        // Check that the proof corresponds to a/the public key set of our Replicas.
+        match bincode::serialize(&proof.transfer_cmd) {
+            Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
+            Ok(data) => {
+                for set in &self.replica_key_history {
+                    let public_key = safe_nd::PublicKey::Bls(set.public_key());
+                    let result = public_key.verify(&proof.section_sig, &data);
+                    if result.is_ok() {
+                        return result;
+                    }
+                }
+                Err(Error::InvalidSignature)
+            }
+        }
+
+        // let public_key = safe_nd::PublicKey::Bls(self.replicas.public_key());
+        // match bincode::serialize(&proof.transfer_cmd) {
+        //     Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
+        //     Ok(data) => public_key.verify(&proof.section_sig, data),
+        // }
+    }
+
+    /// Check that we signed this.
+    /// Used both by verify_proof() and verify_transfer_validation().
+    fn verify_is_our_transfer(&self, cmd: &ValidateTransfer) -> Result<()> {
+        match bincode::serialize(&cmd.transfer) {
+            Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
+            Ok(data) => {
+                let actor_sig = self
+                    .client_id
+                    .public_id()
+                    .public_key()
+                    .verify(&cmd.actor_signature, data);
+                if actor_sig.is_ok() {
+                    Ok(())
+                } else {
+                    Err(Error::InvalidSignature)
+                }
+            }
+        }
     }
 }
