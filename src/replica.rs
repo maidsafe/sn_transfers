@@ -7,7 +7,7 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::{
-    history::History, DebitAgreementProof, Identity, KnownGroupAdded, PeersChanged, ReplicaEvent,
+    account::Account, AccountId, DebitAgreementProof, KnownGroupAdded, PeersChanged, ReplicaEvent,
     SignatureShare, Transfer, TransferPropagated, TransferRegistered, TransferValidated,
     ValidateTransfer,
 };
@@ -35,10 +35,10 @@ pub struct Replica {
     /// PK sets of other known groups of Replicas.
     other_groups: HashSet<PublicKeySet>,
     /// Set of all transfers impacting a given identity.
-    histories: HashMap<Identity, History>,
+    accounts: HashMap<AccountId, Account>,
     /// Ensures that invidual actors' transfer
     /// initiations (ValidateTransfer cmd) are sequential.
-    pending_transfers: VClock<Identity>,
+    pending_transfers: VClock<AccountId>,
 }
 
 impl Replica {
@@ -56,7 +56,7 @@ impl Replica {
             index,
             peers,
             other_groups,
-            histories: Default::default(),
+            accounts: Default::default(),
             pending_transfers: VClock::new(),
         }
     }
@@ -70,8 +70,8 @@ impl Replica {
     /// since there is no absolute order on the credits!
     /// Includes the credit at specified index (which may,
     /// or may not, be the same as the one that the Actor has at the same index).
-    pub fn credits_since(&self, identity: &Identity, index: usize) -> Option<Vec<Transfer>> {
-        match self.histories.get(&identity).cloned() {
+    pub fn credits_since(&self, account_id: &AccountId, index: usize) -> Option<Vec<Transfer>> {
+        match self.accounts.get(&account_id).cloned() {
             None => None,
             Some(history) => Some(history.credits_since(index)),
         }
@@ -79,16 +79,16 @@ impl Replica {
 
     /// Query for new debits transfers since specified index.
     /// Includes the debit at specified index.
-    pub fn debits_since(&self, identity: &Identity, index: usize) -> Option<Vec<Transfer>> {
-        match self.histories.get(&identity).cloned() {
+    pub fn debits_since(&self, account_id: &AccountId, index: usize) -> Option<Vec<Transfer>> {
+        match self.accounts.get(&account_id).cloned() {
             None => None,
             Some(history) => Some(history.debits_since(index)),
         }
     }
 
     ///
-    pub fn balance(&self, identity: &Identity) -> Option<Money> {
-        let result = self.histories.get(identity);
+    pub fn balance(&self, account_id: &AccountId) -> Option<Money> {
+        let result = self.accounts.get(account_id);
         match result {
             None => None,
             Some(history) => Some(history.balance()),
@@ -104,7 +104,7 @@ impl Replica {
     // /// WIP
     // pub fn genesis(&self, proof: DebitAgreementProof) -> Result<TransferPropagated> {
     //     // genesis must be the first
-    //     if self.histories.len() > 0 {
+    //     if self.accounts.len() > 0 {
     //         return Err(Error::InvalidOperation);
     //     }
     //     Ok(TransferPropagated { debit_proof, replica_sig })
@@ -156,7 +156,7 @@ impl Replica {
         if transfer.id.actor == transfer.to {
             return Err(Error::InvalidOperation); // "Sender and recipient are the same"
         }
-        if !self.histories.contains_key(&transfer.id.actor) {
+        if !self.accounts.contains_key(&transfer.id.actor) {
             return Err(Error::NoSuchSender); // "{} sender does not exist (trying to transfer {} to {})."
         }
         if transfer.id != self.pending_transfers.inc(transfer.id.actor) {
@@ -188,7 +188,7 @@ impl Replica {
             return Err(Error::InvalidSignature);
         }
         let transfer = &debit_proof.transfer_cmd.transfer;
-        let sender = self.histories.get(&transfer.id.actor);
+        let sender = self.accounts.get(&transfer.id.actor);
         match sender {
             None => Err(Error::NoSuchSender),
             Some(history) => match history.is_sequential(transfer) {
@@ -215,7 +215,7 @@ impl Replica {
             return Err(Error::InvalidSignature);
         }
         let transfer = &debit_proof.transfer_cmd.transfer;
-        let already_exists = match self.histories.get(&transfer.to) {
+        let already_exists = match self.accounts.get(&transfer.to) {
             None => false,
             Some(history) => history.contains(&transfer.id),
         };
@@ -252,18 +252,18 @@ impl Replica {
             }
             ReplicaEvent::TransferRegistered(e) => {
                 let transfer = e.debit_proof.transfer_cmd.transfer;
-                self.histories
+                self.accounts
                     .get_mut(&transfer.id.actor)
                     .unwrap() // this is OK, since eventsourcing implies events are _facts_, you have a bug if it fails here..
                     .append(transfer);
             }
             ReplicaEvent::TransferPropagated(e) => {
                 let transfer = e.debit_proof.transfer_cmd.transfer;
-                match self.histories.get_mut(&transfer.to) {
-                    Some(history) => history.append(transfer),
+                match self.accounts.get_mut(&transfer.to) {
+                    Some(account) => account.append(transfer),
                     None => {
                         // Creates if not exists.
-                        let _ = self.histories.insert(transfer.to, History::new(transfer));
+                        let _ = self.accounts.insert(transfer.to, Account::new(transfer));
                     }
                 }
             }
