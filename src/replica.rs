@@ -12,9 +12,8 @@ use super::{
     ValidateTransfer,
 };
 use crdts::{CmRDT, VClock};
-use std::collections::{HashMap, HashSet};
-
 use safe_nd::{Error, Money, Result};
+use std::collections::{HashMap, HashSet};
 use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKeyShare};
 
 /// The Replica is the part of an AT2 system
@@ -66,9 +65,11 @@ impl Replica {
     /// ---------------------- Queries ----------------------------------
     /// -----------------------------------------------------------------
 
-    /// Query for new credits transfers since specified index.
+    /// Query for new credits since specified index.
     /// NB: This is not guaranteed to give you all unknown to you,
     /// since there is no absolute order on the credits!
+    /// Includes the credit at specified index (which may,
+    /// or may not, be the same as the one that the Actor has at the same index).
     pub fn credits_since(&self, identity: &Identity, index: usize) -> Option<Vec<Transfer>> {
         match self.histories.get(&identity).cloned() {
             None => None,
@@ -77,6 +78,7 @@ impl Replica {
     }
 
     /// Query for new debits transfers since specified index.
+    /// Includes the debit at specified index.
     pub fn debits_since(&self, identity: &Identity, index: usize) -> Option<Vec<Transfer>> {
         match self.histories.get(&identity).cloned() {
             None => None,
@@ -155,9 +157,7 @@ impl Replica {
             return Err(Error::InvalidOperation); // "Sender and recipient are the same"
         }
         if !self.histories.contains_key(&transfer.id.actor) {
-            // println!(
-            //     "{} sender does not exist (trying to transfer {} to {}).",
-            return Err(Error::NoSuchSender);
+            return Err(Error::NoSuchSender); // "{} sender does not exist (trying to transfer {} to {})."
         }
         if transfer.id != self.pending_transfers.inc(transfer.id.actor) {
             return Err(Error::InvalidOperation); // "either already proposed or out of order msg"
@@ -165,8 +165,7 @@ impl Replica {
         match self.balance(&transfer.id.actor) {
             Some(balance) => {
                 if transfer.amount > balance {
-                    // println!("{} does not have enough money to transfer {} to {}. (balance: {})"
-                    return Err(Error::InsufficientBalance);
+                    return Err(Error::InsufficientBalance); // "{} does not have enough money to transfer {} to {}. (balance: {})"
                 }
             }
             None => return Err(Error::NoSuchSender), //"From account doesn't exist"
@@ -205,7 +204,7 @@ impl Replica {
         }
     }
 
-    /// Step 3. Validation of agreement, and idempotency at credit destination.
+    /// Step 3. Validation of DebitAgreementProof, and credit idempotency at credit destination.
     /// (Since this leads to a credit, there is no requirement on order.)
     pub fn receive_propagated(
         &self,
