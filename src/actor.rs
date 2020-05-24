@@ -8,9 +8,9 @@
 
 use super::{
     history::History, ActorEvent, CreditAgreementProof, DebitAgreementProof, Identity,
-    RegisterTransfer, RemoteCreditsSynced, RemoteDebitsSynced, SignatureShare, SignedCredit,
-    Transfer, TransferInitiated, TransferRegistrationSent, TransferValidated,
-    TransferValidationReceived, ValidateTransfer,
+    RegisterTransfer, SignatureShare, SignedCredit, Transfer, TransferInitiated,
+    TransferRegistrationSent, TransferValidated, TransferValidationReceived,
+    UnknownCreditsReceived, UnknownDebitsReceived, ValidateTransfer,
 };
 use crdts::Dot;
 use safe_nd::{ClientFullId, Error, Money, Result, Signature};
@@ -231,11 +231,54 @@ impl Actor {
         }
     }
 
-    /// Step xx. Continuous syncing from Replicas ensure
-    /// that we receive transfers initiated at other Actor instances (same id or other).
-    /// This can be push or pull model, decided by upper layer.
-    pub fn sync_credits(&self, proofs: Vec<SignedCredit>) -> Result<RemoteCreditsSynced> {
-        let mut accumulating_credits = proofs
+    /// Step xx. Continuously receiving debits from Replicas via push or pull model, decided by upper layer.
+    /// This ensures that we receive transfers initiated at other Actor instances (same id or other,
+    /// i.e. with multiple instances of same Actor we can also sync debits made on other isntances).
+    pub fn receive_debits(
+        &self,
+        debits: Vec<DebitAgreementProof>,
+    ) -> Result<UnknownDebitsReceived> {
+        let mut debits = debits
+            .iter()
+            .filter(|p| self.id == p.transfer_cmd.transfer.id.actor)
+            .filter(|p| self.verify_debits_proof(p).is_ok())
+            .collect::<Vec<&DebitAgreementProof>>();
+
+        debits.sort_by_key(|t| t.transfer_cmd.transfer.id.counter);
+
+        let mut iter = 0;
+        let mut valid_debits = vec![];
+        for out in debits {
+            let version = out.transfer_cmd.transfer.id.counter;
+            let expected_version = iter + self.history.next_debit();
+            if version != expected_version {
+                break; // since it's sorted, if first is not matching, then no point continuing
+            }
+            valid_debits.push(out.clone());
+            iter += 1;
+        }
+
+        if valid_debits.len() > 0 {
+            Ok(UnknownDebitsReceived {
+                debits: valid_debits,
+            })
+        } else {
+            Err(Error::InvalidOperation) // TODO: We need much better error types to inform about what is wrong.
+        }
+    }
+
+    /// Step xx. Continuously receiving credits from Replicas via push or pull model, decided by upper layer.
+    /// The credits are most likely originating at an Actor whose Replicas are not the same as our Replicas.
+    /// That means that the signature on the DebitAgreementProof, is that of some Replicas we don't know.
+    /// What we do here is to aggregate signatures from our Replicas, over that same DebitAgreementProof, as to
+    /// confirm that it is a valid DebitAgreementProof. An alternative to this would be to know the other Replicas
+    /// (i.e. know them as valid Replicas in the network) so that we could verify their signature with their public key.
+    /// Unfortunately, that would require us to know all groups of Replicas in the entire network.
+    /// The solution picked here is more convoluted (at this place at least), as we aggregate signatures from all our Replicas,
+    /// but it allows our Actor instance to be aware of only its Replicas, and no other.
+    /// Cost / benefit (or better solution of course) to be discussed..
+    pub fn receive_credits(&self, proofs: Vec<SignedCredit>) -> Result<UnknownCreditsReceived> {
+        let accumulating_credits = proofs
             .iter()
             .filter(|p| self.id == p.debit_proof.transfer_cmd.transfer.to)
             .filter(|p| {
@@ -292,49 +335,17 @@ impl Actor {
             }
         }
 
-        // TODO: Remove from accumulating_credits where we have a proof.
+        // NB: We do not remove from accumulating_credits where we have a proof,
+        // simply because we inform about the signature share received by keeping it.
+        // It does not affect state, since that set is cleared when we have a proof.
 
         let any_valid_credits =
             accumulating_credits.len() > 0 || accumulated_credit_proofs.len() > 0;
 
         if any_valid_credits {
-            Ok(RemoteCreditsSynced {
+            Ok(UnknownCreditsReceived {
                 accumulating_credits,
                 accumulated_credit_proofs,
-            })
-        } else {
-            Err(Error::InvalidOperation)
-        }
-    }
-
-    /// Step xx. Continuous syncing from Replicas ensure
-    /// that we receive transfers initiated at other Actor instances (same id or other).
-    /// This can be push or pull model, decided by upper layer.
-    /// With multiple devices we can also sync debits made on other devices.
-    pub fn sync_debits(&self, debits: Vec<DebitAgreementProof>) -> Result<RemoteDebitsSynced> {
-        let mut debits = debits
-            .iter()
-            .filter(|p| self.id == p.transfer_cmd.transfer.id.actor)
-            .filter(|p| self.verify_debits_proof(p).is_ok())
-            .collect::<Vec<&DebitAgreementProof>>();
-
-        debits.sort_by_key(|t| t.transfer_cmd.transfer.id.counter);
-
-        let mut iter = 0;
-        let mut valid_debits = vec![];
-        for out in debits {
-            let version = out.transfer_cmd.transfer.id.counter;
-            let expected_version = iter + self.history.next_debit();
-            if version != expected_version {
-                break; // since it's sorted, if first is not matching, then no point continuing
-            }
-            valid_debits.push(out.clone());
-            iter += 1;
-        }
-
-        if valid_debits.len() > 0 {
-            Ok(RemoteDebitsSynced {
-                debits: valid_debits,
             })
         } else {
             Err(Error::InvalidOperation)
@@ -381,7 +392,12 @@ impl Actor {
                 self.history.append(transfer);
                 self.accumulating_validations.clear();
             }
-            ActorEvent::RemoteCreditsSynced(e) => {
+            ActorEvent::UnknownDebitsReceived(e) => {
+                for proof in e.debits {
+                    self.history.append(proof.transfer_cmd.transfer);
+                }
+            }
+            ActorEvent::UnknownCreditsReceived(e) => {
                 for credit in e.accumulating_credits {
                     let hash = vec![]; // hash(credit.debit_proof.transfer_cmd.transfer.id)
                     match self.accumulating_remote_credits.get_mut(&hash) {
@@ -400,11 +416,6 @@ impl Actor {
                     self.history.append(proof.debit_proof.transfer_cmd.transfer); // append credit
                     let hash = vec![]; // hash(credit.debit_proof.transfer_cmd.transfer.id)
                     let _ = self.accumulating_remote_credits.remove(&hash); // clear accumulation of the credit
-                }
-            }
-            ActorEvent::RemoteDebitsSynced(e) => {
-                for proof in e.debits {
-                    self.history.append(proof.transfer_cmd.transfer);
                 }
             }
         };

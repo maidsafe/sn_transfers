@@ -117,6 +117,13 @@ pub struct TransferValidated {
     pub replica_signature: SignatureShare,
     /// The PK Set of the Replicas
     pub replicas: PublicKeySet,
+    // NB: I'm a bit ambivalent to this implicit communication of public key change.
+    // I generally prefer an explicit cmd + event for such a significant part of the logic.
+    // Including it here minimizes msg types and traffic, and seamlessly - apparently -
+    // updates Actors on any public key change, which they can accumulate in order to
+    // apply the change to local state.
+    // But it inflicts on, and complicates the logic for validating a transfer..
+    // Cost / benefit to be discussed..
 }
 
 /// The debiting Replica event raised when
@@ -188,10 +195,10 @@ pub enum ActorEvent {
     TransferRegistrationSent(TransferRegistrationSent),
     /// Raised when the Actor has received
     /// unknown credits on querying Replicas.
-    RemoteCreditsSynced(RemoteCreditsSynced),
+    UnknownCreditsReceived(UnknownCreditsReceived),
     /// Raised when the Actor has received
     /// unknown debits on querying Replicas.
-    RemoteDebitsSynced(RemoteDebitsSynced),
+    UnknownDebitsReceived(UnknownDebitsReceived),
 }
 
 /// This event is raised by the Actor after having
@@ -232,19 +239,25 @@ pub struct SignedCredit {
 }
 
 /// Raised when the Actor has received
-/// unknown credits on querying Replicas.
+/// credits that its Replicas were holding upon
+/// the propagation of them from a remote group of Replicas.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct RemoteCreditsSynced {
-    /// Credits validated by a single Replica.
+pub struct UnknownCreditsReceived {
+    /// Credits we don't have locally, validated by a single Replica.
+    /// We don't apply them, simply begin accumulate the signatures.
     accumulating_credits: Vec<SignedCredit>,
-    /// Credits where a quorum of Replicas have validated, producing a proof.
+    /// Credits we have been accumulating,
+    /// and where we now got a quorum of Replicas signing them,
+    /// thus producing a proof. These can now be applied to the Actor balance.
     accumulated_credit_proofs: Vec<CreditAgreementProof>,
 }
 
-/// Raised when the Actor has received
-/// unknown debits on querying Replicas.
+/// Raised when an Actor instance has received
+/// unknown debits that its Replicas were holding
+/// upon the registration of them from another
+/// instance of the same Actor.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct RemoteDebitsSynced {
-    /// debiting transfers.
+pub struct UnknownDebitsReceived {
+    /// The debits we do not have locally.
     debits: Vec<DebitAgreementProof>,
 }
