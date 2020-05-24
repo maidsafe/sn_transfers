@@ -195,10 +195,10 @@ pub enum ActorEvent {
     TransferRegistrationSent(TransferRegistrationSent),
     /// Raised when the Actor has received
     /// unknown credits on querying Replicas.
-    UnknownCreditsReceived(UnknownCreditsReceived),
+    NewCreditsReceived(NewCreditsReceived),
     /// Raised when the Actor has received
     /// unknown debits on querying Replicas.
-    UnknownDebitsReceived(UnknownDebitsReceived),
+    NewDebitsReceived(NewDebitsReceived),
 }
 
 /// This event is raised by the Actor after having
@@ -242,7 +242,7 @@ pub struct SignedCredit {
 /// credits that its Replicas were holding upon
 /// the propagation of them from a remote group of Replicas.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct UnknownCreditsReceived {
+pub struct NewCreditsReceived {
     /// Credits we don't have locally, validated by a single Replica.
     /// We don't apply them, simply begin accumulate the signatures.
     accumulating_credits: Vec<SignedCredit>,
@@ -257,7 +257,7 @@ pub struct UnknownCreditsReceived {
 /// upon the registration of them from another
 /// instance of the same Actor.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct UnknownDebitsReceived {
+pub struct NewDebitsReceived {
     /// The debits we do not have locally.
     debits: Vec<DebitAgreementProof>,
 }
