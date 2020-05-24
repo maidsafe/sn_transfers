@@ -17,10 +17,11 @@ use std::collections::{HashMap, HashSet};
 use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKeyShare};
 
 /// The Replica is the part of an AT2 system
-/// that forms validating groups, and signs individual
-/// Actors' transfers.
-/// They validate credits requests for transfer, and
-/// apply operations that has a valid proof of agreement from the group.
+/// that forms validating groups, and signs
+/// individual transfers between accounts.
+/// Replicas validate requests to debit an account, and
+/// apply operations that has a valid "debit agreement proof"
+/// from the group, i.e. signatures from a quorum of its peers.
 /// Replicas don't initiate transfers or drive the algo - only Actors do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Replica {
@@ -31,14 +32,14 @@ pub struct Replica {
     /// Secret key share.
     secret_key: SecretKeyShare,
     /// The PK set of our peer Replicas.
-    peers: PublicKeySet,
+    peer_replicas: PublicKeySet,
     /// PK sets of other known groups of Replicas.
     other_groups: HashSet<PublicKeySet>,
-    /// Set of all transfers impacting a given identity.
+    /// All accounts that this Replica validates transfers for.
     accounts: HashMap<AccountId, Account>,
-    /// Ensures that invidual actors' transfer
+    /// Ensures that invidual account's debit
     /// initiations (ValidateTransfer cmd) are sequential.
-    pending_transfers: VClock<AccountId>,
+    pending_debits: VClock<AccountId>,
 }
 
 impl Replica {
@@ -46,7 +47,7 @@ impl Replica {
     pub fn new(
         secret_key: SecretKeyShare,
         index: usize,
-        peers: PublicKeySet,
+        peer_replicas: PublicKeySet,
         other_groups: HashSet<PublicKeySet>,
     ) -> Self {
         let id = secret_key.public_key_share();
@@ -54,10 +55,10 @@ impl Replica {
             secret_key,
             id,
             index,
-            peers,
+            peer_replicas,
             other_groups,
             accounts: Default::default(),
-            pending_transfers: VClock::new(),
+            pending_debits: VClock::new(),
         }
     }
 
@@ -112,7 +113,7 @@ impl Replica {
 
     /// On peer composition change we get a new PublicKeySet.
     pub fn set_peers(&self, peers: PublicKeySet) -> Result<PeersChanged> {
-        if peers == self.peers {
+        if peers == self.peer_replicas {
             return Err(Error::DataExists);
         }
         Ok(PeersChanged { peers })
@@ -140,7 +141,7 @@ impl Replica {
                 Ok(replica_signature) => Ok(TransferValidated {
                     transfer_cmd,
                     replica_signature,
-                    replicas: self.peers.clone(),
+                    replicas: self.peer_replicas.clone(),
                 }),
             }
         }
@@ -159,7 +160,7 @@ impl Replica {
         if !self.accounts.contains_key(&transfer.id.actor) {
             return Err(Error::NoSuchSender); // "{} sender does not exist (trying to transfer {} to {})."
         }
-        if transfer.id != self.pending_transfers.inc(transfer.id.actor) {
+        if transfer.id != self.pending_debits.inc(transfer.id.actor) {
             return Err(Error::InvalidOperation); // "either already proposed or out of order msg"
         }
         match self.balance(&transfer.id.actor) {
@@ -176,7 +177,7 @@ impl Replica {
             Ok(replica_signature) => Ok(TransferValidated {
                 transfer_cmd: cmd,
                 replica_signature,
-                replicas: self.peers.clone(),
+                replicas: self.peer_replicas.clone(),
             }),
         }
     }
@@ -242,13 +243,13 @@ impl Replica {
     /// and thus anything that breaks here, is a bug in the validation..
     pub fn apply(&mut self, event: ReplicaEvent) {
         match event {
-            ReplicaEvent::PeersChanged(e) => self.peers = e.peers,
+            ReplicaEvent::PeersChanged(e) => self.peer_replicas = e.peers,
             ReplicaEvent::KnownGroupAdded(e) => {
                 let _ = self.other_groups.insert(e.group);
             }
             ReplicaEvent::TransferValidated(e) => {
                 let transfer = e.transfer_cmd.transfer;
-                self.pending_transfers.apply(transfer.id);
+                self.pending_debits.apply(transfer.id);
             }
             ReplicaEvent::TransferRegistered(e) => {
                 let transfer = e.debit_proof.transfer_cmd.transfer;
@@ -286,7 +287,7 @@ impl Replica {
         }
     }
 
-    /// Replicas of the credited Actor, sign the debit proof
+    /// Replicas of the credited account, sign the debit proof
     /// for the Actor to aggregate and verify locally.
     /// An alternative to this is to have the Actor know (and trust) all other Replica groups.
     fn sign_proof(&self, proof: &DebitAgreementProof) -> Result<SignatureShare> {
@@ -315,14 +316,14 @@ impl Replica {
     }
 
     /// Verify that this is a valid _registered_
-    /// ProofOfAgreement, i.e. signed by our peers.
+    /// DebitAgreementProof, i.e. signed by our peers.
     fn verify_registered_proof(&self, proof: &DebitAgreementProof) -> Result<()> {
-        // Check that the proof corresponds to a public key set of our peer Replicas.
+        // Check that the proof corresponds to a public key set of our peers.
         match bincode::serialize(&proof.transfer_cmd) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
                 // Check if proof is signed by our peers.
-                let public_key = safe_nd::PublicKey::Bls(self.peers.public_key());
+                let public_key = safe_nd::PublicKey::Bls(self.peer_replicas.public_key());
                 let result = public_key.verify(&proof.sender_replicas_sig, &data);
                 if result.is_ok() {
                     return result;
@@ -334,13 +335,13 @@ impl Replica {
     }
 
     /// Verify that this is a valid _propagated_
-    // ProofOfAgreement, i.e. signed by a group that we know of.
+    // DebitAgreementProof, i.e. signed by a group that we know of.
     fn verify_propagated_proof(&self, proof: &DebitAgreementProof) -> Result<()> {
         // Check that the proof corresponds to a public key set of some Replicas.
         match bincode::serialize(&proof.transfer_cmd) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
-                // Check all known groups of peers.
+                // Check all known groups of Replicas.
                 for set in &self.other_groups {
                     let public_key = safe_nd::PublicKey::Bls(set.public_key());
                     let result = public_key.verify(&proof.sender_replicas_sig, &data);

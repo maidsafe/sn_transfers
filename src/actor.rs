@@ -8,9 +8,9 @@
 
 use super::{
     account::Account, AccountId, ActorEvent, CreditAgreementProof, DebitAgreementProof,
-    RegisterTransfer, SignatureShare, SignedCredit, Transfer, TransferInitiated,
-    TransferRegistrationSent, TransferValidated, TransferValidationReceived,
-    UnknownCreditsReceived, UnknownDebitsReceived, ValidateTransfer,
+    NewCreditsReceived, NewDebitsReceived, RegisterTransfer, SignatureShare, SignedCredit,
+    Transfer, TransferInitiated, TransferRegistrationSent, TransferValidated,
+    TransferValidationReceived, ValidateTransfer,
 };
 use crdts::Dot;
 use safe_nd::{ClientFullId, Error, Money, Result, Signature};
@@ -234,10 +234,7 @@ impl Actor {
     /// Step xx. Continuously receiving debits from Replicas via push or pull model, decided by upper layer.
     /// This ensures that we receive transfers initiated at other Actor instances (same id or other,
     /// i.e. with multiple instances of same Actor we can also sync debits made on other isntances).
-    pub fn receive_debits(
-        &self,
-        debits: Vec<DebitAgreementProof>,
-    ) -> Result<UnknownDebitsReceived> {
+    pub fn receive_debits(&self, debits: Vec<DebitAgreementProof>) -> Result<NewDebitsReceived> {
         let mut debits = debits
             .iter()
             .filter(|p| self.id == p.transfer_cmd.transfer.id.actor)
@@ -259,7 +256,7 @@ impl Actor {
         }
 
         if valid_debits.len() > 0 {
-            Ok(UnknownDebitsReceived {
+            Ok(NewDebitsReceived {
                 debits: valid_debits,
             })
         } else {
@@ -277,7 +274,7 @@ impl Actor {
     /// The solution picked here is more convoluted (at this place at least), as we aggregate signatures from all our Replicas,
     /// but it allows our Actor instance to be aware of only its Replicas, and no other.
     /// Cost / benefit (or better solution of course) to be discussed..
-    pub fn receive_credits(&self, proofs: Vec<SignedCredit>) -> Result<UnknownCreditsReceived> {
+    pub fn receive_credits(&self, proofs: Vec<SignedCredit>) -> Result<NewCreditsReceived> {
         let accumulating_credits = proofs
             .iter()
             .filter(|p| self.id == p.debit_proof.transfer_cmd.transfer.to)
@@ -343,7 +340,7 @@ impl Actor {
             accumulating_credits.len() > 0 || accumulated_credit_proofs.len() > 0;
 
         if any_valid_credits {
-            Ok(UnknownCreditsReceived {
+            Ok(NewCreditsReceived {
                 accumulating_credits,
                 accumulated_credit_proofs,
             })
@@ -392,12 +389,12 @@ impl Actor {
                 self.account.append(transfer);
                 self.accumulating_validations.clear();
             }
-            ActorEvent::UnknownDebitsReceived(e) => {
+            ActorEvent::NewDebitsReceived(e) => {
                 for proof in e.debits {
                     self.account.append(proof.transfer_cmd.transfer);
                 }
             }
-            ActorEvent::UnknownCreditsReceived(e) => {
+            ActorEvent::NewCreditsReceived(e) => {
                 for credit in e.accumulating_credits {
                     let hash = vec![]; // hash(credit.debit_proof.transfer_cmd.transfer.id)
                     match self.accumulating_remote_credits.get_mut(&hash) {
@@ -499,7 +496,6 @@ impl Actor {
     }
 
     /// Check that we signed this.
-    /// Used both by verify_proof() and verify_transfer_validation().
     fn verify_is_our_transfer(&self, cmd: &ValidateTransfer) -> Result<()> {
         match bincode::serialize(&cmd.transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
