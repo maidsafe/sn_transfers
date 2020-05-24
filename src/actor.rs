@@ -7,7 +7,7 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::{
-    history::History, ActorEvent, CreditAgreementProof, DebitAgreementProof, Identity,
+    account::Account, AccountId, ActorEvent, CreditAgreementProof, DebitAgreementProof,
     RegisterTransfer, SignatureShare, SignedCredit, Transfer, TransferInitiated,
     TransferRegistrationSent, TransferValidated, TransferValidationReceived,
     UnknownCreditsReceived, UnknownDebitsReceived, ValidateTransfer,
@@ -34,10 +34,10 @@ type TransferIdHash = Vec<u8>;
 /// It also syncs transfers from the Replicas.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Actor {
-    id: Identity,
+    id: AccountId,
     client_id: ClientFullId,
     /// Set of all transfers impacting a given identity
-    history: History,
+    account: Account,
     /// Ensures that the actor's transfer
     /// initiations (ValidateTransfer cmd) are sequential.
     current_debit_version: Option<u64>,
@@ -68,7 +68,7 @@ impl Actor {
             id: transfer.to,
             client_id,
             replicas,
-            history: History::new(transfer),
+            account: Account::new(transfer),
             current_debit_version: None,
             accumulating_validations: Default::default(),
             accumulating_remote_credits: Default::default(),
@@ -83,17 +83,17 @@ impl Actor {
     /// NB: This is not guaranteed to give you all unknown to you,
     /// since there is no absolute order on the credits!
     pub fn credits_since(&self, index: usize) -> Vec<Transfer> {
-        self.history.credits_since(index)
+        self.account.credits_since(index)
     }
 
     /// Query for new debits since specified index.
     pub fn debits_since(&self, index: usize) -> Vec<Transfer> {
-        self.history.debits_since(index)
+        self.account.debits_since(index)
     }
 
-    /// Query
+    /// Query for the balance of the Actor.
     pub fn local_balance(&self) -> Money {
-        self.history.balance()
+        self.account.balance()
     }
 
     /// -----------------------------------------------------------------
@@ -101,12 +101,12 @@ impl Actor {
     /// -----------------------------------------------------------------
 
     /// Step 1. Build a valid cmd for validation of a debit.
-    pub fn initiate(&self, amount: Money, to: Identity) -> Result<TransferInitiated> {
+    pub fn initiate(&self, amount: Money, to: AccountId) -> Result<TransferInitiated> {
         if to == self.id {
             return Err(Error::InvalidOperation); // "Sender and recipient are the same"
         }
 
-        let id = Dot::new(self.id, self.history.next_debit());
+        let id = Dot::new(self.id, self.account.next_debit());
 
         match self.current_debit_version {
             None => {
@@ -116,7 +116,7 @@ impl Actor {
             }
             Some(current_debit) => {
                 let next_debit = current_debit + 1;
-                if next_debit != self.history.next_debit() {
+                if next_debit != self.account.next_debit() {
                     // ensures one debit is completed at a time
                     return Err(Error::InvalidOperation); // "current pending debit has not been completed"
                 }
@@ -217,7 +217,7 @@ impl Actor {
         if !self.verify_debits_proof(&proof).is_ok() {
             return Err(Error::InvalidSignature);
         }
-        match self.history.is_sequential(&proof.transfer_cmd.transfer) {
+        match self.account.is_sequential(&proof.transfer_cmd.transfer) {
             Ok(is_sequential) => {
                 if is_sequential {
                     Ok(TransferRegistrationSent {
@@ -227,7 +227,7 @@ impl Actor {
                     Err(Error::InvalidOperation) // "Non-sequential operation"
                 }
             }
-            Err(_) => Err(Error::InvalidOperation), // from this place this code won't happen, but history validates the transfer is actually debits from it's owner.
+            Err(_) => Err(Error::InvalidOperation), // from this place this code won't happen, but account validates the transfer is actually debits from it's owner.
         }
     }
 
@@ -250,7 +250,7 @@ impl Actor {
         let mut valid_debits = vec![];
         for out in debits {
             let version = out.transfer_cmd.transfer.id.counter;
-            let expected_version = iter + self.history.next_debit();
+            let expected_version = iter + self.account.next_debit();
             if version != expected_version {
                 break; // since it's sorted, if first is not matching, then no point continuing
             }
@@ -283,7 +283,7 @@ impl Actor {
             .filter(|p| self.id == p.debit_proof.transfer_cmd.transfer.to)
             .filter(|p| {
                 !self
-                    .history
+                    .account
                     .contains(&p.debit_proof.transfer_cmd.transfer.id)
             })
             .filter(|p| self.verify_credit(p).is_ok())
@@ -389,12 +389,12 @@ impl Actor {
             }
             ActorEvent::TransferRegistrationSent(e) => {
                 let transfer = e.cmd.proof.transfer_cmd.transfer;
-                self.history.append(transfer);
+                self.account.append(transfer);
                 self.accumulating_validations.clear();
             }
             ActorEvent::UnknownDebitsReceived(e) => {
                 for proof in e.debits {
-                    self.history.append(proof.transfer_cmd.transfer);
+                    self.account.append(proof.transfer_cmd.transfer);
                 }
             }
             ActorEvent::UnknownCreditsReceived(e) => {
@@ -413,7 +413,7 @@ impl Actor {
                     }
                 }
                 for proof in e.accumulated_credit_proofs {
-                    self.history.append(proof.debit_proof.transfer_cmd.transfer); // append credit
+                    self.account.append(proof.debit_proof.transfer_cmd.transfer); // append credit
                     let hash = vec![]; // hash(credit.debit_proof.transfer_cmd.transfer.id)
                     let _ = self.accumulating_remote_credits.remove(&hash); // clear accumulation of the credit
                 }

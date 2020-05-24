@@ -25,13 +25,13 @@
     unused_results
 )]
 
+mod account;
 mod actor;
-mod history;
 mod replica;
 
 pub use self::{
-    actor::Actor as TransferActor, history::History as TransferHistory,
-    replica::Replica as TransferReplica, ReplicaEvent as TransferReplicaEvent,
+    account::Account, actor::Actor as TransferActor, replica::Replica as TransferReplica,
+    ReplicaEvent as TransferReplicaEvent,
 };
 
 use crdts::Dot;
@@ -40,10 +40,10 @@ use serde::{Deserialize, Serialize};
 use threshold_crypto::PublicKeySet;
 
 /// ACtor / Replica / Group id
-pub type Identity = PublicKey;
+pub type AccountId = PublicKey;
 
 /// Transfer ID.
-pub type TransferId = Dot<Identity>;
+pub type TransferId = Dot<AccountId>;
 
 /// A transfer of money between two keys.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
@@ -51,7 +51,7 @@ pub struct Transfer {
     /// Transfer ID, containing source key.
     pub id: TransferId,
     /// The destination to transfer to.
-    pub to: Identity,
+    pub to: AccountId,
     /// The amount to transfer.
     pub amount: Money,
 }
