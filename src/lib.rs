@@ -65,13 +65,14 @@ pub struct DebitAgreementProof {
     pub sender_replicas_sig: Signature,
 }
 
-/// The recipient's aggregated Replica signatures of the received DebitAgreementProof.
+/// A received credit, contains the DebitAgreementProof from the sender Replicas,
+/// as well as the public key of those Replicas, for us to verify that they are valid Replicas.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct CreditAgreementProof {
+pub struct ReceivedCredit {
     /// The sender's aggregated Replica signatures of the sender debit.
     pub debit_proof: DebitAgreementProof,
-    /// A recipient's Replicas' aggregated sig over the debit_proof.
-    pub receiver_replica_sig: Signature,
+    /// The public key of the signing Replicas.
+    pub signing_replicas: threshold_crypto::PublicKey,
 }
 
 /// A signature share, with its index in the combined collection.
@@ -164,6 +165,15 @@ pub struct KnownGroupAdded {
 //                      Actor
 // ------------------------------------------------------------
 
+/// An implementation of the ReplicaValidator, should contain the logic from upper layers
+/// for determining if a remote group of Replicas, represented by a PublicKey, is indeed valid.
+/// This is logic from the membership part of the system, and thus handled by the upper layers
+/// membership implementation.
+pub trait ReplicaValidator {
+    /// Determines if a remote group of Replicas, represented by a PublicKey, is indeed valid.
+    fn is_valid(&self, replica_group: threshold_crypto::PublicKey) -> bool;
+}
+
 /// An Actor cmd.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
 pub struct ValidateTransfer {
@@ -195,10 +205,10 @@ pub enum ActorEvent {
     TransferRegistrationSent(TransferRegistrationSent),
     /// Raised when the Actor has received
     /// unknown credits on querying Replicas.
-    NewCreditsReceived(NewCreditsReceived),
+    CreditsReceived(CreditsReceived),
     /// Raised when the Actor has received
     /// unknown debits on querying Replicas.
-    NewDebitsReceived(NewDebitsReceived),
+    DebitsReceived(DebitsReceived),
 }
 
 /// This event is raised by the Actor after having
@@ -228,28 +238,13 @@ pub struct TransferRegistrationSent {
     cmd: RegisterTransfer,
 }
 
-/// The recipient's single Replica signature of the received DebitAgreementProof.
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct SignedCredit {
-    /// The sender's aggregated Replica signatures of the sender debit.
-    pub debit_proof: DebitAgreementProof,
-    /// A single recipient's Replica sig over the debit_proof.
-    /// The recipient Actor need to aggregate this.
-    pub receiver_replica_sig: SignatureShare,
-}
-
 /// Raised when the Actor has received
 /// credits that its Replicas were holding upon
 /// the propagation of them from a remote group of Replicas.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct NewCreditsReceived {
-    /// Credits we don't have locally, validated by a single Replica.
-    /// We don't apply them, simply begin accumulate the signatures.
-    accumulating_credits: Vec<SignedCredit>,
-    /// Credits we have been accumulating,
-    /// and where we now got a quorum of Replicas signing them,
-    /// thus producing a proof. These can now be applied to the Actor balance.
-    accumulated_credit_proofs: Vec<CreditAgreementProof>,
+pub struct CreditsReceived {
+    /// Credits we don't have locally.
+    credits: Vec<ReceivedCredit>,
 }
 
 /// Raised when an Actor instance has received
@@ -257,7 +252,7 @@ pub struct NewCreditsReceived {
 /// upon the registration of them from another
 /// instance of the same Actor.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct NewDebitsReceived {
-    /// The debits we do not have locally.
+pub struct DebitsReceived {
+    /// The debits we don't have locally.
     debits: Vec<DebitAgreementProof>,
 }
