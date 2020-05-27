@@ -20,5 +20,6 @@ safe-nd = { git = "https://github.com/oetyng/safe-nd.git", branch = "at2-network
 serde = { version = "~1.0.97", features = ["derive"] }
 crdts = { git = "https://github.com/rust-crdt/rust-crdt", branch = "useability-improvements" }
 threshold_crypto = "~0.3.2"
+rand = "~0.6.5"
 
 [dev_dependencies]

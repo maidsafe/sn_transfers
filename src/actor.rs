@@ -79,6 +79,11 @@ impl<V: ReplicaValidator> Actor<V> {
     /// ---------------------- Queries ----------------------------------
     /// -----------------------------------------------------------------
 
+    /// Query for the id of the Actor.
+    pub fn id(&self) -> AccountId {
+        self.id
+    }
+
     /// Query for new credits since specified index.
     /// NB: This is not guaranteed to give you all unknown to you,
     /// since there is no absolute order on the credits!
@@ -92,7 +97,7 @@ impl<V: ReplicaValidator> Actor<V> {
     }
 
     /// Query for the balance of the Actor.
-    pub fn local_balance(&self) -> Money {
+    pub fn balance(&self) -> Money {
         self.account.balance()
     }
 
@@ -125,7 +130,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 }
             }
         }
-        if amount > self.local_balance() {
+        if amount > self.balance() {
             // println!("{} does not have enough money to transfer {} to {}. (balance: {})"
             return Err(Error::InsufficientBalance);
         }
@@ -448,5 +453,88 @@ impl<V: ReplicaValidator> Actor<V> {
                 }
             }
         }
+    }
+}
+
+mod test {
+    use super::{Actor, ActorEvent, ReplicaValidator, Transfer, TransferInitiated};
+    use crdts::Dot;
+    use rand::Rng;
+    use safe_nd::{ClientFullId, Money, PublicKey};
+    use threshold_crypto::{SecretKey, SecretKeySet};
+
+    struct Validator {}
+
+    impl ReplicaValidator for Validator {
+        fn is_valid(&self, replica_group: threshold_crypto::PublicKey) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn creates_actor() {
+        // Act
+        let _ = get_actor(10);
+    }
+
+    #[test]
+    fn initial_state_is_applied() {
+        // Act
+        let initial_amount = 10;
+        let actor = get_actor(initial_amount);
+        let credits = actor.credits_since(0);
+        let debits = actor.debits_since(0);
+        assert!(debits.len() == 0);
+        assert!(credits.len() == 1);
+        assert!(credits[0].amount == Money::from_nano(initial_amount));
+        assert!(actor.balance() == Money::from_nano(initial_amount));
+    }
+
+    #[test]
+    fn initiates_transfers() {
+        // Act
+        let actor = get_actor(10);
+        let debit = get_debit(&actor);
+        let mut actor = actor;
+        actor.apply(ActorEvent::TransferInitiated(debit))
+    }
+
+    fn get_debit(actor: &Actor<Validator>) -> TransferInitiated {
+        match actor.initiate(Money::from_nano(10), get_random_pk()) {
+            Ok(event) => event,
+            Err(_) => panic!(),
+        }
+    }
+
+    fn get_actor(amount: u64) -> Actor<Validator> {
+        let mut rng = rand::thread_rng();
+        let client_id = ClientFullId::new_ed25519(&mut rng);
+        let client_pubkey = *client_id.public_id().public_key();
+        let bls_secret_key = SecretKeySet::random(1, &mut rng);
+        let replicas_id = bls_secret_key.public_keys();
+        let balance = Money::from_nano(amount);
+        let sender = Dot::new(get_random_pk(), 0);
+        let transfer = get_transfer(sender, client_pubkey, balance);
+        let replica_validator = Validator {};
+        match Actor::new(client_id, transfer, replicas_id, replica_validator) {
+            None => panic!(),
+            Some(actor) => actor,
+        }
+    }
+
+    fn get_transfer(from: Dot<PublicKey>, to: PublicKey, amount: Money) -> Transfer {
+        Transfer {
+            id: from,
+            to,
+            amount,
+        }
+    }
+
+    fn get_random_dot() -> Dot<PublicKey> {
+        Dot::new(get_random_pk(), 0)
+    }
+
+    fn get_random_pk() -> PublicKey {
+        PublicKey::from(SecretKey::random().public_key())
     }
 }
