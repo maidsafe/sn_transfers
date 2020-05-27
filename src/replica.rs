@@ -450,13 +450,12 @@ mod test {
             }
         }
 
-        let mut set = HashSet::new();
         // Propagate to Replica Group 1
-        for replica_group in &mut replica_groups {
-            if replica_group.index != 1 {
-                continue;
-            }
-            for replica in &mut replica_group.replicas {
+        let credits = replica_groups
+            .iter_mut()
+            .filter(|c| c.index == 1)
+            .map(|c| &mut c.replicas[0])
+            .map(|replica| {
                 let propagated = replica
                     .receive_propagated(debit_proof.clone().unwrap())
                     .unwrap();
@@ -470,16 +469,16 @@ mod test {
                             None => panic!("No balance!"),
                             Some(balance) => assert!(sum == balance),
                         }
-                        let _ = set.insert(ReceivedCredit {
+                        ReceivedCredit {
                             debit_proof: propagated.debit_proof,
                             signing_replicas: sender_replicas_pubkey.unwrap(),
-                        });
+                        }
                     }
                 }
-            }
-        }
-        let received_credits = set.into_iter().collect();
-        let credits_received = actor_1.actor.receive_credits(received_credits).unwrap();
+            })
+            .collect::<Vec<ReceivedCredit>>();
+
+        let credits_received = actor_1.actor.receive_credits(credits).unwrap();
         actor_1
             .actor
             .apply(ActorEvent::CreditsReceived(credits_received));
