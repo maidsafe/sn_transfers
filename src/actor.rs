@@ -190,10 +190,12 @@ impl<V: ReplicaValidator> Actor<V> {
                     accumulated.len() == replicas.threshold() && replicas == validation.replicas;
                 if quorum {
                     // collect sig shares
+                    let last_sig = validation.clone().replica_signature;
                     let sig_shares: BTreeMap<_, _> = accumulated
                         .into_iter()
                         .map(|v| v.replica_signature)
                         .map(|s| (s.index, s.share))
+                        .chain(vec![(last_sig.index, last_sig.share)])
                         .collect();
 
                     if let Ok(data) = bincode::serialize(&transfer_cmd) {

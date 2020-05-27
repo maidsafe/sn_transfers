@@ -39,7 +39,7 @@ pub struct Replica {
     accounts: HashMap<AccountId, Account>,
     /// Ensures that invidual account's debit
     /// initiations (ValidateTransfer cmd) are sequential.
-    pending_debits: VClock<AccountId>,
+    pending_debits: HashMap<AccountId, u64>,
 }
 
 impl Replica {
@@ -49,6 +49,8 @@ impl Replica {
         index: usize,
         peer_replicas: PublicKeySet,
         other_groups: HashSet<PublicKeySet>,
+        accounts: HashMap<AccountId, Account>,
+        pending_debits: HashMap<AccountId, u64>,
     ) -> Self {
         let id = secret_key.public_key_share();
         Replica {
@@ -57,8 +59,8 @@ impl Replica {
             index,
             peer_replicas,
             other_groups,
-            accounts: Default::default(),
-            pending_debits: VClock::new(),
+            accounts,
+            pending_debits,
         }
     }
 
@@ -160,8 +162,17 @@ impl Replica {
         if !self.accounts.contains_key(&transfer.id.actor) {
             return Err(Error::NoSuchSender); // "{} sender does not exist (trying to transfer {} to {})."
         }
-        if transfer.id != self.pending_debits.inc(transfer.id.actor) {
-            return Err(Error::InvalidOperation); // "either already proposed or out of order msg"
+        match self.pending_debits.get(&transfer.id.actor) {
+            None => {
+                if transfer.id.counter != 0 {
+                    return Err(Error::InvalidOperation); // "either already proposed or out of order msg"
+                }
+            }
+            Some(value) => {
+                if transfer.id.counter != (value + 1) {
+                    return Err(Error::InvalidOperation); // "either already proposed or out of order msg"
+                }
+            }
         }
         match self.balance(&transfer.id.actor) {
             Some(balance) => {
@@ -249,7 +260,8 @@ impl Replica {
             }
             ReplicaEvent::TransferValidated(e) => {
                 let transfer = e.transfer_cmd.transfer;
-                self.pending_debits.apply(transfer.id);
+                let _ = self.pending_debits
+                    .insert(transfer.id.actor, transfer.id.counter);
             }
             ReplicaEvent::TransferRegistered(e) => {
                 let transfer = e.debit_proof.transfer_cmd.transfer;
@@ -359,14 +371,16 @@ impl Replica {
 mod test {
     use super::Replica;
     use crate::{
-        actor::Actor, ActorEvent, ReceivedCredit, ReplicaEvent, ReplicaValidator, Transfer,
+        actor::Actor, Account, AccountId, ActorEvent, ReceivedCredit, ReplicaEvent,
+        ReplicaValidator, Transfer,
     };
     use crdts::Dot;
     use rand::Rng;
     use safe_nd::{ClientFullId, Money, PublicKey};
     use std::collections::{HashMap, HashSet};
-    use threshold_crypto::{PublicKeySet, SecretKey, SecretKeySet};
+    use threshold_crypto::{PublicKeySet, SecretKey, SecretKeySet, SecretKeyShare};
 
+    #[derive(Debug, Clone)]
     struct Validator {}
 
     impl ReplicaValidator for Validator {
@@ -381,10 +395,20 @@ mod test {
         let actor_0_initial = Money::from_nano(100);
         let actor_1_initial = Money::from_nano(10);
         let actor_1_final = actor_0_initial.checked_add(actor_1_initial).unwrap();
-        let mut actor_0 = get_actor(actor_0_initial.as_nano());
-        let mut actor_1 = get_actor(actor_1_initial.as_nano());
-        let mut replica_groups = get_replica_groups();
-        let transfer = actor_0.initiate(actor_0.balance(), actor_1.id()).unwrap();
+        let group_keys = get_replica_group_keys(2, 3);
+        let (key_0, _) = group_keys.get(&0).unwrap().clone();
+        let (key_1, _) = group_keys.get(&1).unwrap().clone();
+        let mut actor_0 = get_actor(actor_0_initial.as_nano(), 0, key_0);
+        let mut actor_1 = get_actor(actor_1_initial.as_nano(), 1, key_1);
+        let accounts = vec![actor_0.clone(), actor_1.clone()];
+        let mut replica_groups = get_replica_groups(group_keys, accounts);
+        let transfer = actor_0
+            .actor
+            .initiate(actor_0.actor.balance(), actor_1.actor.id())
+            .unwrap();
+        actor_0
+            .actor
+            .apply(ActorEvent::TransferInitiated(transfer.clone()));
         let cmd = transfer.cmd;
         let mut debit_proof = None;
         let mut sender_replicas_pubkey = None;
@@ -399,12 +423,16 @@ mod test {
             for replica in group {
                 let validated = replica.validate(cmd.clone()).unwrap();
                 replica.apply(ReplicaEvent::TransferValidated(validated.clone()));
-                let validation_received = actor_0.receive(validated).unwrap();
-                actor_0.apply(ActorEvent::TransferValidationReceived(
+                let validation_received = actor_0.actor.receive(validated).unwrap();
+                actor_0.actor.apply(ActorEvent::TransferValidationReceived(
                     validation_received.clone(),
                 ));
 
                 if let Some(proof) = validation_received.proof {
+                    let registered = actor_0.actor.register(proof.clone()).unwrap();
+                    actor_0
+                        .actor
+                        .apply(ActorEvent::TransferRegistrationSent(registered));
                     debit_proof = Some(proof);
                 }
             }
@@ -432,13 +460,14 @@ mod test {
                     .receive_propagated(debit_proof.clone().unwrap())
                     .unwrap();
                 replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()));
-                match replica.credits_since(&actor_1.id(), 0) {
+                match replica.credits_since(&actor_1.actor.id(), 0) {
                     None => panic!("No credits!"),
                     Some(credits) => {
-                        assert!(credits.len() == 1);
-                        match replica.balance(&actor_1.id()) {
+                        assert!(credits.len() == 2);
+                        let sum = credits[0].amount.checked_add(credits[1].amount).unwrap();
+                        match replica.balance(&actor_1.actor.id()) {
                             None => panic!("No balance!"),
-                            Some(balance) => assert!(credits[0].amount == balance),
+                            Some(balance) => assert!(sum == balance),
                         }
                         let _ = set.insert(ReceivedCredit {
                             debit_proof: propagated.debit_proof,
@@ -449,63 +478,88 @@ mod test {
             }
         }
         let received_credits = set.into_iter().collect();
-        let credits_received = actor_1.receive_credits(received_credits).unwrap();
-        actor_1.apply(ActorEvent::CreditsReceived(credits_received));
+        let credits_received = actor_1.actor.receive_credits(received_credits).unwrap();
+        actor_1
+            .actor
+            .apply(ActorEvent::CreditsReceived(credits_received));
 
         // --- Assert ---
 
-        assert!(actor_0.balance() == Money::zero());
-        assert!(actor_1.balance() == actor_1_final);
+        assert!(actor_0.actor.balance() == Money::zero());
+        assert!(actor_1.actor.balance() == actor_1_final);
     }
 
-    fn get_replica_groups() -> HashMap<usize, (PublicKeySet, Vec<Replica>)> {
+    // Create n replica groups, with k replicas in each
+    fn get_replica_group_keys(
+        group_count: u64,
+        replica_count: u64,
+    ) -> HashMap<u64, (PublicKeySet, Vec<(SecretKeyShare, usize)>)> {
         let mut rng = rand::thread_rng();
-
-        // Create 3 replica groups, with 3 replicas in each
-        let v: [u64; 3] = [0, 1, 2];
         let mut groups = HashMap::new();
-        for i in &v {
-            let bls_secret_key = SecretKeySet::random(3, &mut rng);
+        for i in 0..group_count {
+            let threshold = (2 * replica_count / 3) - 1;
+            let bls_secret_key = SecretKeySet::random(threshold as usize, &mut rng);
             let peers = bls_secret_key.public_keys();
             let mut shares = vec![];
-            for j in &v {
+            for j in 0..replica_count {
                 let share = bls_secret_key.secret_key_share(j);
-                shares.push((share, *j as usize));
+                shares.push((share, j as usize));
             }
             let _ = groups.insert(i, (peers, shares));
         }
+        groups
+    }
 
-        let mut other_groups = HashMap::new();
-        let _ = other_groups.insert(0, vec![1, 2]);
-        let _ = other_groups.insert(1, vec![0, 2]);
-        let _ = other_groups.insert(2, vec![0, 1]);
-
-        let mut replica_groups = HashMap::new();
-        for i in &v {
-            let other = other_groups[i]
+    fn get_replica_groups(
+        group_keys: HashMap<u64, (PublicKeySet, Vec<(SecretKeyShare, usize)>)>,
+        accounts: Vec<TestActor>,
+    ) -> HashMap<u64, (PublicKeySet, Vec<Replica>)> {
+        let mut other_groups_keys = HashMap::new();
+        for (i, _) in group_keys.clone() {
+            let other = group_keys
                 .clone()
                 .into_iter()
-                .map(|c| groups[i].clone())
-                .map(|c| c.0)
+                .filter(|(c, _)| *c != i)
+                .map(|(_, (public_key_set, _))| public_key_set)
                 .collect::<HashSet<PublicKeySet>>();
+            let _ = other_groups_keys.insert(i, other);
+        }
+
+        let mut replica_groups = HashMap::new();
+        for (i, other) in &other_groups_keys {
+            let group_accounts = accounts
+                .clone()
+                .into_iter()
+                .filter(|c| c.replica_group == *i)
+                .map(|c| (c.actor.id(), c.account_clone.clone()))
+                .collect::<HashMap<AccountId, Account>>();
 
             let mut replicas = vec![];
-            let (key, shares) = groups[i].clone();
-            for (share, index) in shares {
-                let replica = Replica::new(share, index, key.clone(), other.clone());
+            let (key, shares) = group_keys[i].clone();
+            for (secret_key, index) in shares {
+                let peer_replicas = key.clone();
+                let other_groups = other.clone();
+                let accounts = group_accounts.clone();
+                let pending_debits = Default::default();
+                let replica = Replica::new(
+                    secret_key,
+                    index,
+                    peer_replicas,
+                    other_groups,
+                    accounts,
+                    pending_debits,
+                );
                 replicas.push(replica);
             }
-            let _ = replica_groups.insert(*i as usize, (key, replicas));
+            let _ = replica_groups.insert(*i, (key, replicas));
         }
         replica_groups
     }
 
-    fn get_actor(amount: u64) -> Actor<Validator> {
+    fn get_actor(amount: u64, replica_group: u64, replicas_id: PublicKeySet) -> TestActor {
         let mut rng = rand::thread_rng();
         let client_id = ClientFullId::new_ed25519(&mut rng);
         let client_pubkey = *client_id.public_id().public_key();
-        let bls_secret_key = SecretKeySet::random(1, &mut rng);
-        let replicas_id = bls_secret_key.public_keys();
         let balance = Money::from_nano(amount);
         let sender = Dot::new(get_random_pk(), 0);
         let transfer = Transfer {
@@ -514,13 +568,24 @@ mod test {
             amount: balance,
         };
         let replica_validator = Validator {};
-        match Actor::new(client_id, transfer, replicas_id, replica_validator) {
+        match Actor::new(client_id, transfer.clone(), replicas_id, replica_validator) {
             None => panic!(),
-            Some(actor) => actor,
+            Some(actor) => TestActor {
+                actor,
+                account_clone: Account::new(transfer),
+                replica_group,
+            },
         }
     }
 
     fn get_random_pk() -> PublicKey {
         PublicKey::from(SecretKey::random().public_key())
+    }
+
+    #[derive(Debug, Clone)]
+    struct TestActor {
+        actor: Actor<Validator>,
+        account_clone: Account,
+        replica_group: u64,
     }
 }
