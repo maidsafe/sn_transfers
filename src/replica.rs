@@ -454,28 +454,21 @@ mod test {
         let credits = replica_groups
             .iter_mut()
             .filter(|c| c.index == 1)
-            .map(|c| &mut c.replicas[0])
-            .map(|replica| {
-                let propagated = replica
-                    .receive_propagated(debit_proof.clone().unwrap())
-                    .unwrap();
-                replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()));
-                match replica.credits_since(&actor_1.actor.id(), 0) {
-                    None => panic!("No credits!"),
-                    Some(credits) => {
-                        assert!(credits.len() == 2);
-                        let sum = credits[0].amount.checked_add(credits[1].amount).unwrap();
-                        match replica.balance(&actor_1.actor.id()) {
-                            None => panic!("No balance!"),
-                            Some(balance) => assert!(sum == balance),
-                        }
-                        ReceivedCredit {
-                            debit_proof: propagated.debit_proof,
-                            signing_replicas: sender_replicas_pubkey.unwrap(),
-                        }
+            .map(|c| {
+                c.replicas.iter_mut().map(|replica| {
+                    let propagated = replica
+                        .receive_propagated(debit_proof.clone().unwrap())
+                        .unwrap();
+                    replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()));
+                    ReceivedCredit {
+                        debit_proof: propagated.debit_proof,
+                        signing_replicas: sender_replicas_pubkey.unwrap(),
                     }
-                }
+                })
             })
+            .flatten()
+            .collect::<HashSet<ReceivedCredit>>()
+            .into_iter()
             .collect::<Vec<ReceivedCredit>>();
 
         let credits_received = actor_1.actor.receive_credits(credits).unwrap();
@@ -485,8 +478,33 @@ mod test {
 
         // --- Assert ---
 
+        // Actor has correct balance
         assert!(actor_0.actor.balance() == Money::zero());
         assert!(actor_1.actor.balance() == actor_1_final);
+
+        // Replicas in Group 0 has correct balance
+        replica_groups
+            .iter_mut()
+            .filter(|c| c.index == 0)
+            .map(|c| {
+                c.replicas
+                    .iter_mut()
+                    .map(|replica| replica.balance(&actor_0.actor.id()).unwrap())
+            })
+            .flatten()
+            .for_each(|balance| assert!(balance == Money::zero()));
+        
+            // Replicas in group 1 has correct balance
+        replica_groups
+            .iter_mut()
+            .filter(|c| c.index == 1)
+            .map(|c| {
+                c.replicas
+                    .iter_mut()
+                    .map(|replica| replica.balance(&actor_1.actor.id()).unwrap())
+            })
+            .flatten()
+            .for_each(|balance| assert!(balance == actor_1_final));
     }
 
     // Create n replica groups, with k replicas in each
