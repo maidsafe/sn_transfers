@@ -355,3 +355,172 @@ impl Replica {
         }
     }
 }
+
+mod test {
+    use super::Replica;
+    use crate::{
+        actor::Actor, ActorEvent, ReceivedCredit, ReplicaEvent, ReplicaValidator, Transfer,
+    };
+    use crdts::Dot;
+    use rand::Rng;
+    use safe_nd::{ClientFullId, Money, PublicKey};
+    use std::collections::{HashMap, HashSet};
+    use threshold_crypto::{PublicKeySet, SecretKey, SecretKeySet};
+
+    struct Validator {}
+
+    impl ReplicaValidator for Validator {
+        fn is_valid(&self, replica_group: threshold_crypto::PublicKey) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn send_between_replica_groups() {
+        // --- Arrange ---
+        let actor_0_initial = Money::from_nano(100);
+        let actor_1_initial = Money::from_nano(10);
+        let actor_1_final = actor_0_initial.checked_add(actor_1_initial).unwrap();
+        let mut actor_0 = get_actor(actor_0_initial.as_nano());
+        let mut actor_1 = get_actor(actor_1_initial.as_nano());
+        let mut replica_groups = get_replica_groups();
+        let transfer = actor_0.initiate(actor_0.balance(), actor_1.id()).unwrap();
+        let cmd = transfer.cmd;
+        let mut debit_proof = None;
+        let mut sender_replicas_pubkey = None;
+
+        // --- Act ---
+        // Validate at Replica Group 0
+        for (index, (keyset, group)) in &mut replica_groups {
+            if *index != 0 {
+                continue;
+            }
+            sender_replicas_pubkey = Some(keyset.public_key());
+            for replica in group {
+                let validated = replica.validate(cmd.clone()).unwrap();
+                replica.apply(ReplicaEvent::TransferValidated(validated.clone()));
+                let validation_received = actor_0.receive(validated).unwrap();
+                actor_0.apply(ActorEvent::TransferValidationReceived(
+                    validation_received.clone(),
+                ));
+
+                if let Some(proof) = validation_received.proof {
+                    debit_proof = Some(proof);
+                }
+            }
+        }
+
+        // Register at Replica Group 0
+        for (index, (_, group)) in &mut replica_groups {
+            if *index != 0 {
+                continue;
+            }
+            for replica in group {
+                let registered = replica.register(debit_proof.clone().unwrap()).unwrap();
+                replica.apply(ReplicaEvent::TransferRegistered(registered));
+            }
+        }
+
+        let mut set = HashSet::new();
+        // Propagate to Replica Group 1
+        for (index, (_, group)) in &mut replica_groups {
+            if *index != 1 {
+                continue;
+            }
+            for replica in group {
+                let propagated = replica
+                    .receive_propagated(debit_proof.clone().unwrap())
+                    .unwrap();
+                replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()));
+                match replica.credits_since(&actor_1.id(), 0) {
+                    None => panic!("No credits!"),
+                    Some(credits) => {
+                        assert!(credits.len() == 1);
+                        match replica.balance(&actor_1.id()) {
+                            None => panic!("No balance!"),
+                            Some(balance) => assert!(credits[0].amount == balance),
+                        }
+                        let _ = set.insert(ReceivedCredit {
+                            debit_proof: propagated.debit_proof,
+                            signing_replicas: sender_replicas_pubkey.unwrap(),
+                        });
+                    }
+                }
+            }
+        }
+        let received_credits = set.into_iter().collect();
+        let credits_received = actor_1.receive_credits(received_credits).unwrap();
+        actor_1.apply(ActorEvent::CreditsReceived(credits_received));
+
+        // --- Assert ---
+
+        assert!(actor_0.balance() == Money::zero());
+        assert!(actor_1.balance() == actor_1_final);
+    }
+
+    fn get_replica_groups() -> HashMap<usize, (PublicKeySet, Vec<Replica>)> {
+        let mut rng = rand::thread_rng();
+
+        // Create 3 replica groups, with 3 replicas in each
+        let v: [u64; 3] = [0, 1, 2];
+        let mut groups = HashMap::new();
+        for i in &v {
+            let bls_secret_key = SecretKeySet::random(3, &mut rng);
+            let peers = bls_secret_key.public_keys();
+            let mut shares = vec![];
+            for j in &v {
+                let share = bls_secret_key.secret_key_share(j);
+                shares.push((share, *j as usize));
+            }
+            let _ = groups.insert(i, (peers, shares));
+        }
+
+        let mut other_groups = HashMap::new();
+        let _ = other_groups.insert(0, vec![1, 2]);
+        let _ = other_groups.insert(1, vec![0, 2]);
+        let _ = other_groups.insert(2, vec![0, 1]);
+
+        let mut replica_groups = HashMap::new();
+        for i in &v {
+            let other = other_groups[i]
+                .clone()
+                .into_iter()
+                .map(|c| groups[i].clone())
+                .map(|c| c.0)
+                .collect::<HashSet<PublicKeySet>>();
+
+            let mut replicas = vec![];
+            let (key, shares) = groups[i].clone();
+            for (share, index) in shares {
+                let replica = Replica::new(share, index, key.clone(), other.clone());
+                replicas.push(replica);
+            }
+            let _ = replica_groups.insert(*i as usize, (key, replicas));
+        }
+        replica_groups
+    }
+
+    fn get_actor(amount: u64) -> Actor<Validator> {
+        let mut rng = rand::thread_rng();
+        let client_id = ClientFullId::new_ed25519(&mut rng);
+        let client_pubkey = *client_id.public_id().public_key();
+        let bls_secret_key = SecretKeySet::random(1, &mut rng);
+        let replicas_id = bls_secret_key.public_keys();
+        let balance = Money::from_nano(amount);
+        let sender = Dot::new(get_random_pk(), 0);
+        let transfer = Transfer {
+            id: sender,
+            to: client_pubkey,
+            amount: balance,
+        };
+        let replica_validator = Validator {};
+        match Actor::new(client_id, transfer, replicas_id, replica_validator) {
+            None => panic!(),
+            Some(actor) => actor,
+        }
+    }
+
+    fn get_random_pk() -> PublicKey {
+        PublicKey::from(SecretKey::random().public_key())
+    }
+}
