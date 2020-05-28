@@ -391,47 +391,60 @@ mod test {
     }
 
     #[test]
-    fn send_between_replica_groups() {
+    fn transfer() {
+        send_between_replica_groups(100, 10, 2, 3, 0, 1);
+    }
+
+    fn send_between_replica_groups(
+        sender_balance: u64,
+        recipient_balance: u64,
+        group_count: u8,
+        replica_count: u8,
+        sender_index: u8,
+        recipient_index: u8,
+    ) {
+        // --- Filter ---
+
         // --- Arrange ---
-        let actor_0_initial = Money::from_nano(100);
-        let actor_1_initial = Money::from_nano(10);
-        let actor_1_final = actor_0_initial.checked_add(actor_1_initial).unwrap();
-        let group_keys = get_replica_group_keys(2, 3);
-        let group_0 = group_keys.get(&0).unwrap().clone();
-        let group_1 = group_keys.get(&1).unwrap().clone();
-        let mut actor_0 = get_actor(actor_0_initial.as_nano(), group_0.index, group_0.id);
-        let mut actor_1 = get_actor(actor_1_initial.as_nano(), group_1.index, group_1.id);
-        let accounts = vec![actor_0.clone(), actor_1.clone()];
-        let mut replica_groups = get_replica_groups(group_keys, accounts);
-        let transfer = actor_0
+        let recipient_final = sender_balance + recipient_balance;
+        let group_keys = get_replica_group_keys(group_count, replica_count);
+        let sender_group = group_keys.get(&sender_index).unwrap().clone();
+        let recipient_group = group_keys.get(&recipient_index).unwrap().clone();
+
+        let mut sender = get_actor(sender_balance, sender_group.index, sender_group.id);
+        let mut recipient = get_actor(recipient_balance, recipient_group.index, recipient_group.id);
+        let mut replica_groups =
+            get_replica_groups(group_keys, vec![sender.clone(), recipient.clone()]);
+
+        let transfer = sender
             .actor
-            .initiate(actor_0.actor.balance(), actor_1.actor.id())
+            .initiate(sender.actor.balance(), recipient.actor.id())
             .unwrap();
-        actor_0
+        sender
             .actor
             .apply(ActorEvent::TransferInitiated(transfer.clone()));
-        let cmd = transfer.cmd;
+
         let mut debit_proof = None;
         let mut sender_replicas_pubkey = None;
 
         // --- Act ---
-        // Validate at Replica Group 0
+        // Validate at Sender Replicas
         for replica_group in &mut replica_groups {
-            if replica_group.index != 0 {
+            if replica_group.index != sender_index {
                 continue;
             }
             sender_replicas_pubkey = Some(replica_group.id.public_key());
             for replica in &mut replica_group.replicas {
-                let validated = replica.validate(cmd.clone()).unwrap();
+                let validated = replica.validate(transfer.cmd.clone()).unwrap();
                 replica.apply(ReplicaEvent::TransferValidated(validated.clone()));
-                let validation_received = actor_0.actor.receive(validated).unwrap();
-                actor_0.actor.apply(ActorEvent::TransferValidationReceived(
+                let validation_received = sender.actor.receive(validated).unwrap();
+                sender.actor.apply(ActorEvent::TransferValidationReceived(
                     validation_received.clone(),
                 ));
 
                 if let Some(proof) = validation_received.proof {
-                    let registered = actor_0.actor.register(proof.clone()).unwrap();
-                    actor_0
+                    let registered = sender.actor.register(proof.clone()).unwrap();
+                    sender
                         .actor
                         .apply(ActorEvent::TransferRegistrationSent(registered));
                     debit_proof = Some(proof);
@@ -439,9 +452,9 @@ mod test {
             }
         }
 
-        // Register at Replica Group 0
+        // Register at Sender Replicas
         for replica_group in &mut replica_groups {
-            if replica_group.index != 0 {
+            if replica_group.index != sender_index {
                 continue;
             }
             for replica in &mut replica_group.replicas {
@@ -450,10 +463,10 @@ mod test {
             }
         }
 
-        // Propagate to Replica Group 1
+        // Propagate to Recipient Replicas
         let credits = replica_groups
             .iter_mut()
-            .filter(|c| c.index == 1)
+            .filter(|c| c.index == recipient_index)
             .map(|c| {
                 c.replicas.iter_mut().map(|replica| {
                     let propagated = replica
@@ -471,47 +484,44 @@ mod test {
             .into_iter()
             .collect::<Vec<ReceivedCredit>>();
 
-        let credits_received = actor_1.actor.receive_credits(credits).unwrap();
-        actor_1
+        let credits_received = recipient.actor.receive_credits(credits).unwrap();
+        recipient
             .actor
             .apply(ActorEvent::CreditsReceived(credits_received));
 
         // --- Assert ---
 
         // Actor has correct balance
-        assert!(actor_0.actor.balance() == Money::zero());
-        assert!(actor_1.actor.balance() == actor_1_final);
+        assert!(sender.actor.balance() == Money::zero());
+        assert!(recipient.actor.balance() == Money::from_nano(recipient_final));
 
-        // Replicas in Group 0 has correct balance
+        // Replicas of the sender have correct balance
         replica_groups
             .iter_mut()
-            .filter(|c| c.index == 0)
+            .filter(|c| c.index == sender_index)
             .map(|c| {
                 c.replicas
                     .iter_mut()
-                    .map(|replica| replica.balance(&actor_0.actor.id()).unwrap())
+                    .map(|replica| replica.balance(&sender.actor.id()).unwrap())
             })
             .flatten()
             .for_each(|balance| assert!(balance == Money::zero()));
-        
-            // Replicas in group 1 has correct balance
+
+        // Replicas of the recipient have correct balance
         replica_groups
             .iter_mut()
-            .filter(|c| c.index == 1)
+            .filter(|c| c.index == recipient_index)
             .map(|c| {
                 c.replicas
                     .iter_mut()
-                    .map(|replica| replica.balance(&actor_1.actor.id()).unwrap())
+                    .map(|replica| replica.balance(&recipient.actor.id()).unwrap())
             })
             .flatten()
-            .for_each(|balance| assert!(balance == actor_1_final));
+            .for_each(|balance| assert!(balance == Money::from_nano(recipient_final)));
     }
 
     // Create n replica groups, with k replicas in each
-    fn get_replica_group_keys(
-        group_count: u64,
-        replica_count: u64,
-    ) -> HashMap<u64, ReplicaGroupKeys> {
+    fn get_replica_group_keys(group_count: u8, replica_count: u8) -> HashMap<u8, ReplicaGroupKeys> {
         let mut rng = rand::thread_rng();
         let mut groups = HashMap::new();
         for i in 0..group_count {
@@ -520,7 +530,7 @@ mod test {
             let peers = bls_secret_key.public_keys();
             let mut shares = vec![];
             for j in 0..replica_count {
-                let share = bls_secret_key.secret_key_share(j);
+                let share = bls_secret_key.secret_key_share(j as usize);
                 shares.push((share, j as usize));
             }
             let _ = groups.insert(
@@ -536,7 +546,7 @@ mod test {
     }
 
     fn get_replica_groups(
-        group_keys: HashMap<u64, ReplicaGroupKeys>,
+        group_keys: HashMap<u8, ReplicaGroupKeys>,
         accounts: Vec<TestActor>,
     ) -> Vec<ReplicaGroup> {
         let mut other_groups_keys = HashMap::new();
@@ -585,7 +595,7 @@ mod test {
         replica_groups
     }
 
-    fn get_actor(balance: u64, replica_group: u64, replicas_id: PublicKeySet) -> TestActor {
+    fn get_actor(balance: u64, replica_group: u8, replicas_id: PublicKeySet) -> TestActor {
         let mut rng = rand::thread_rng();
         let client_id = ClientFullId::new_ed25519(&mut rng);
         let to = *client_id.public_id().public_key();
@@ -615,19 +625,19 @@ mod test {
     struct TestActor {
         actor: Actor<Validator>,
         account_clone: Account,
-        replica_group: u64,
+        replica_group: u8,
     }
 
     #[derive(Debug, Clone)]
     struct ReplicaGroup {
-        index: u64,
+        index: u8,
         id: PublicKeySet,
         replicas: Vec<Replica>,
     }
 
     #[derive(Debug, Clone)]
     struct ReplicaGroupKeys {
-        index: u64,
+        index: u8,
         id: PublicKeySet,
         keys: Vec<(SecretKeyShare, usize)>,
     }
