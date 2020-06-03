@@ -262,7 +262,10 @@ mod test {
         actor::Actor, replica::Replica, Account, AccountId, ActorEvent, ReceivedCredit,
         ReplicaEvent, ReplicaValidator, Transfer,
     };
-    use crdts::Dot;
+    use crdts::{
+        quickcheck::{quickcheck, TestResult},
+        Dot,
+    };
     use rand::Rng;
     use safe_nd::{ClientFullId, Money, PublicKey};
     use std::collections::{HashMap, HashSet};
@@ -282,6 +285,11 @@ mod test {
         send_between_replica_groups(100, 10, 2, 3, 0, 1);
     }
 
+    #[test]
+    fn quickcheck_transfer() {
+        quickcheck(send_between_replica_groups as fn(u64, u64, u8, u8, u8, u8) -> TestResult);
+    }
+
     fn send_between_replica_groups(
         sender_balance: u64,
         recipient_balance: u64,
@@ -289,9 +297,16 @@ mod test {
         replica_count: u8,
         sender_index: u8,
         recipient_index: u8,
-    ) {
+    ) -> TestResult {
         // --- Filter ---
-
+        if 0 >= sender_balance
+            || 0 >= group_count
+            || 2 >= replica_count
+            || sender_index >= group_count
+            || recipient_index >= group_count
+        {
+            return TestResult::discard();
+        }
         // --- Arrange ---
         let recipient_final = sender_balance + recipient_balance;
         let group_keys = get_replica_group_keys(group_count, replica_count);
@@ -316,37 +331,53 @@ mod test {
 
         // --- Act ---
         // Validate at Sender Replicas
-        for replica_group in &mut replica_groups {
-            if replica_group.index != sender_index {
-                continue;
-            }
-            sender_replicas_pubkey = Some(replica_group.id.public_key());
-            for replica in &mut replica_group.replicas {
-                let validated = replica.validate(transfer.cmd.clone()).unwrap();
-                replica.apply(ReplicaEvent::TransferValidated(validated.clone()));
-                let validation_received = sender.actor.receive(validated).unwrap();
-                sender.actor.apply(ActorEvent::TransferValidationReceived(
-                    validation_received.clone(),
-                ));
-
-                if let Some(proof) = validation_received.proof {
-                    let registered = sender.actor.register(proof.clone()).unwrap();
-                    sender
-                        .actor
-                        .apply(ActorEvent::TransferRegistrationSent(registered));
-                    debit_proof = Some(proof);
+        match find_group(sender_index, &mut replica_groups) {
+            None => panic!("group not found!"),
+            Some(replica_group) => {
+                sender_replicas_pubkey = Some(replica_group.id.public_key());
+                for replica in &mut replica_group.replicas {
+                    let validated = replica.validate(transfer.cmd.clone()).unwrap();
+                    replica.apply(ReplicaEvent::TransferValidated(validated.clone()));
+                    let validation_received = sender.actor.receive(validated).unwrap();
+                    sender.actor.apply(ActorEvent::TransferValidationReceived(
+                        validation_received.clone(),
+                    ));
+                    if let Some(proof) = validation_received.proof {
+                        let registered = sender.actor.register(proof.clone()).unwrap();
+                        sender
+                            .actor
+                            .apply(ActorEvent::TransferRegistrationSent(registered));
+                        debit_proof = Some(proof);
+                    }
                 }
             }
         }
 
+        if debit_proof.is_none() {
+            println!(
+                "No debit proof! sender_balance: {},
+            recipient_balance: {},
+            group_count: {},
+            replica_count: {},
+            sender_index: {},
+            recipient_index: {},",
+                sender_balance,
+                recipient_balance,
+                group_count,
+                replica_count,
+                sender_index,
+                recipient_index
+            )
+        }
+
         // Register at Sender Replicas
-        for replica_group in &mut replica_groups {
-            if replica_group.index != sender_index {
-                continue;
-            }
-            for replica in &mut replica_group.replicas {
-                let registered = replica.register(debit_proof.clone().unwrap()).unwrap();
-                replica.apply(ReplicaEvent::TransferRegistered(registered));
+        match find_group(sender_index, &mut replica_groups) {
+            None => panic!("group not found!"),
+            Some(replica_group) => {
+                for replica in &mut replica_group.replicas {
+                    let registered = replica.register(debit_proof.clone().unwrap()).unwrap();
+                    replica.apply(ReplicaEvent::TransferRegistered(registered));
+                }
             }
         }
 
@@ -405,6 +436,17 @@ mod test {
             })
             .flatten()
             .for_each(|balance| assert!(balance == Money::from_nano(recipient_final)));
+
+        TestResult::passed()
+    }
+
+    fn find_group(index: u8, replica_groups: &mut Vec<ReplicaGroup>) -> Option<&mut ReplicaGroup> {
+        for replica_group in replica_groups {
+            if replica_group.index == index {
+                return Some(replica_group);
+            }
+        }
+        None
     }
 
     // Create n replica groups, with k replicas in each
