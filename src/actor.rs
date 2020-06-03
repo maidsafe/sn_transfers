@@ -64,6 +64,9 @@ impl<V: ReplicaValidator> Actor<V> {
         if id != transfer.to {
             return None;
         }
+        if 0 >= transfer.amount.as_nano() {
+            return None;
+        }
         Some(Actor {
             id: transfer.to,
             client_id,
