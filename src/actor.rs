@@ -7,13 +7,15 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::{
-    account::Account, AccountId, ActorEvent, CreditsReceived, DebitAgreementProof, DebitsReceived,
-    ReceivedCredit, RegisterTransfer, ReplicaValidator, SignatureShare, Transfer,
-    TransferInitiated, TransferRegistrationSent, TransferValidated, TransferValidationReceived,
-    ValidateTransfer,
+    account::Account, ActorEvent, CreditsReceived, DebitsReceived, ReceivedCredit,
+    ReplicaValidator, TransferInitiated, TransferRegistrationSent, TransferValidated,
+    TransferValidationReceived,
 };
 use crdts::Dot;
-use safe_nd::{ClientFullId, Error, Money, Result, Signature};
+use safe_nd::{
+    AccountId, ClientFullId, DebitAgreementProof, Error, Money, Result, Signature, SignatureShare,
+    SignedTransfer, Transfer,
+};
 use std::collections::{BTreeMap, HashSet};
 use threshold_crypto::PublicKeySet;
 
@@ -140,11 +142,11 @@ impl<V: ReplicaValidator> Actor<V> {
         let transfer = Transfer { id, to, amount };
         match self.sign(&transfer) {
             Ok(actor_signature) => {
-                let cmd = ValidateTransfer {
+                let signed_transfer = SignedTransfer {
                     transfer,
                     actor_signature,
                 };
-                Ok(TransferInitiated { cmd })
+                Ok(TransferInitiated { signed_transfer })
             }
             Err(e) => Err(e),
         }
@@ -156,16 +158,16 @@ impl<V: ReplicaValidator> Actor<V> {
         if !self.verify(&validation).is_ok() {
             return Err(Error::InvalidSignature);
         }
-        let transfer_cmd = &validation.transfer_cmd;
+        let signed_transfer = &validation.signed_transfer;
         // check if validation was initiated by this actor
-        if self.id != transfer_cmd.transfer.id.actor {
+        if self.id != signed_transfer.transfer.id.actor {
             return Err(Error::InvalidOperation); // "validation is not intended for this actor"
         }
         // check if expected this validation
         match self.current_debit_version {
             None => return Err(Error::InvalidOperation), // "there is no pending transfer, cannot receive validations"
             Some(version) => {
-                if version != transfer_cmd.transfer.id.counter {
+                if version != signed_transfer.transfer.id.counter {
                     return Err(Error::InvalidOperation); // "out of order validation"
                 }
             }
@@ -201,7 +203,7 @@ impl<V: ReplicaValidator> Actor<V> {
                         .chain(vec![(last_sig.index, last_sig.share)])
                         .collect();
 
-                    if let Ok(data) = bincode::serialize(&transfer_cmd) {
+                    if let Ok(data) = bincode::serialize(&signed_transfer) {
                         // Combine shares to produce the main signature.
                         let sig = replicas
                             .combine_signatures(&sig_shares)
@@ -209,7 +211,7 @@ impl<V: ReplicaValidator> Actor<V> {
                         // Validate the main signature. If the shares were valid, this can't fail.
                         if replicas.public_key().verify(&sig, data) {
                             proof = Some(DebitAgreementProof {
-                                transfer_cmd: transfer_cmd.clone(),
+                                signed_transfer: signed_transfer.clone(),
                                 sender_replicas_sig: safe_nd::Signature::Bls(sig),
                             });
                         } // else, we have some corrupt data
@@ -221,18 +223,19 @@ impl<V: ReplicaValidator> Actor<V> {
         Ok(TransferValidationReceived { validation, proof })
     }
 
-    /// Step 3. Build a valid cmd for registration of an agreed transfer.
-    pub fn register(&self, proof: DebitAgreementProof) -> Result<TransferRegistrationSent> {
+    /// Step 3. xxxx for registration of an agreed transfer.
+    pub fn register(&self, debit_proof: DebitAgreementProof) -> Result<TransferRegistrationSent> {
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_debit_proof(&proof).is_ok() {
+        if !self.verify_debit_proof(&debit_proof).is_ok() {
             return Err(Error::InvalidSignature);
         }
-        match self.account.is_sequential(&proof.transfer_cmd.transfer) {
+        match self
+            .account
+            .is_sequential(&debit_proof.signed_transfer.transfer)
+        {
             Ok(is_sequential) => {
                 if is_sequential {
-                    Ok(TransferRegistrationSent {
-                        cmd: RegisterTransfer { proof },
-                    })
+                    Ok(TransferRegistrationSent { debit_proof })
                 } else {
                     Err(Error::InvalidOperation) // "Non-sequential operation"
                 }
@@ -251,11 +254,11 @@ impl<V: ReplicaValidator> Actor<V> {
         let valid_credits = proofs
             .iter()
             .filter(|p| self.verify_credit_proof(p).is_ok())
-            .filter(|p| self.id == p.debit_proof.transfer_cmd.transfer.to)
+            .filter(|p| self.id == p.debit_proof.signed_transfer.transfer.to)
             .filter(|p| {
                 !self
                     .account
-                    .contains(&p.debit_proof.transfer_cmd.transfer.id)
+                    .contains(&p.debit_proof.signed_transfer.transfer.id)
             })
             .map(|p| p.clone())
             .collect::<Vec<ReceivedCredit>>();
@@ -275,16 +278,16 @@ impl<V: ReplicaValidator> Actor<V> {
     pub fn receive_debits(&self, debits: Vec<DebitAgreementProof>) -> Result<DebitsReceived> {
         let mut debits = debits
             .iter()
-            .filter(|p| self.id == p.transfer_cmd.transfer.id.actor)
+            .filter(|p| self.id == p.signed_transfer.transfer.id.actor)
             .filter(|p| self.verify_debit_proof(p).is_ok())
             .collect::<Vec<&DebitAgreementProof>>();
 
-        debits.sort_by_key(|t| t.transfer_cmd.transfer.id.counter);
+        debits.sort_by_key(|t| t.signed_transfer.transfer.id.counter);
 
         let mut iter = 0;
         let mut valid_debits = vec![];
         for out in debits {
-            let version = out.transfer_cmd.transfer.id.counter;
+            let version = out.signed_transfer.transfer.id.counter;
             let expected_version = iter + self.account.next_debit();
             if version != expected_version {
                 break; // since it's sorted, if first is not matching, then no point continuing
@@ -312,7 +315,7 @@ impl<V: ReplicaValidator> Actor<V> {
     pub fn apply(&mut self, event: ActorEvent) {
         match event {
             ActorEvent::TransferInitiated(e) => {
-                let transfer = e.cmd.transfer;
+                let transfer = e.signed_transfer.transfer;
                 self.current_debit_version = Some(transfer.id.counter);
             }
             ActorEvent::TransferValidationReceived(e) => {
@@ -338,19 +341,19 @@ impl<V: ReplicaValidator> Actor<V> {
                 }
             }
             ActorEvent::TransferRegistrationSent(e) => {
-                let transfer = e.cmd.proof.transfer_cmd.transfer;
+                let transfer = e.debit_proof.signed_transfer.transfer;
                 self.account.append(transfer);
                 self.accumulating_validations.clear();
             }
             ActorEvent::CreditsReceived(e) => {
                 for credit in e.credits {
                     self.account
-                        .append(credit.debit_proof.transfer_cmd.transfer); // append credit
+                        .append(credit.debit_proof.signed_transfer.transfer); // append credit
                 }
             }
             ActorEvent::DebitsReceived(e) => {
                 for proof in e.debits {
-                    self.account.append(proof.transfer_cmd.transfer);
+                    self.account.append(proof.signed_transfer.transfer);
                 }
             }
         };
@@ -373,7 +376,7 @@ impl<V: ReplicaValidator> Actor<V> {
     /// Note that we use the provided pk set to verify the event.
     /// This might not be the way we want to do it.
     fn verify(&self, event: &TransferValidated) -> Result<()> {
-        let cmd = &event.transfer_cmd;
+        let cmd = &event.signed_transfer;
         // Check that we signed this.
         if let error @ Err(_) = self.verify_is_our_transfer(cmd) {
             return error;
@@ -409,14 +412,14 @@ impl<V: ReplicaValidator> Actor<V> {
 
     /// Verify that this is a valid DebitAgreementProof over our cmd.
     fn verify_debit_proof(&self, proof: &DebitAgreementProof) -> Result<()> {
-        let cmd = &proof.transfer_cmd;
+        let cmd = &proof.signed_transfer;
         // Check that we signed this.
         if let error @ Err(_) = self.verify_is_our_transfer(cmd) {
             return error;
         }
 
         // Check that the proof corresponds to a/the public key set of our Replicas.
-        match bincode::serialize(&proof.transfer_cmd) {
+        match bincode::serialize(&proof.signed_transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
                 let public_key = safe_nd::PublicKey::Bls(self.replicas.public_key());
@@ -432,7 +435,7 @@ impl<V: ReplicaValidator> Actor<V> {
         }
         let proof = &credit.debit_proof;
         // Check that the proof corresponds to a/the public key set of our Replicas.
-        match bincode::serialize(&proof.transfer_cmd) {
+        match bincode::serialize(&proof.signed_transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
                 let public_key = safe_nd::PublicKey::Bls(credit.signing_replicas);
@@ -442,15 +445,15 @@ impl<V: ReplicaValidator> Actor<V> {
     }
 
     /// Check that we signed this.
-    fn verify_is_our_transfer(&self, cmd: &ValidateTransfer) -> Result<()> {
-        match bincode::serialize(&cmd.transfer) {
+    fn verify_is_our_transfer(&self, signed_transfer: &SignedTransfer) -> Result<()> {
+        match bincode::serialize(&signed_transfer.transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
                 let actor_sig = self
                     .client_id
                     .public_id()
                     .public_key()
-                    .verify(&cmd.actor_signature, data);
+                    .verify(&signed_transfer.actor_signature, data);
                 if actor_sig.is_ok() {
                     Ok(())
                 } else {
