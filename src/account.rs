@@ -6,8 +6,7 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use super::{AccountId, Transfer, TransferId};
-use safe_nd::{Error, Money, Result};
+use safe_nd::{AccountId, Error, Money, Result, Transfer, TransferId};
 use std::collections::HashSet;
 
 /// The balance and history of transfers for an account id.
