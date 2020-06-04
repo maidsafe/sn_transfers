@@ -56,28 +56,36 @@ impl<V: ReplicaValidator> Actor<V> {
     /// Without it, there is no Actor, since there is no balance.
     /// There is no essential validations here, since without a valid transfer
     /// this Actor can't really convince Replicas to do anything.
-    pub fn new(
-        client_id: ClientFullId,
-        transfer: Transfer,
-        replicas: PublicKeySet,
-        replica_validator: V,
-    ) -> Option<Actor<V>> {
+    pub fn new(client_id: ClientFullId, replicas: PublicKeySet, replica_validator: V) -> Actor<V> {
         let id = *client_id.public_id().public_key();
-        if id != transfer.to {
-            return None;
-        }
-        if 0 >= transfer.amount.as_nano() {
-            return None;
-        }
-        Some(Actor {
-            id: transfer.to,
+        Actor {
+            id,
             client_id,
             replicas,
             replica_validator,
-            account: Account::new(transfer),
+            account: Account::new(id),
             next_debit_version: 0,
             accumulating_validations: Default::default(),
-        })
+        }
+    }
+
+    /// Temp, for test purposes
+    pub fn from_snapshot(
+        account: Account,
+        client_id: ClientFullId,
+        replicas: PublicKeySet,
+        replica_validator: V,
+    ) -> Actor<V> {
+        let id = *client_id.public_id().public_key();
+        Actor {
+            id,
+            client_id,
+            replicas,
+            replica_validator,
+            account,
+            next_debit_version: 0,
+            accumulating_validations: Default::default(),
+        }
     }
 
     /// -----------------------------------------------------------------
@@ -90,8 +98,6 @@ impl<V: ReplicaValidator> Actor<V> {
     }
 
     /// Query for new credits since specified index.
-    /// NB: This is not guaranteed to give you all unknown to you,
-    /// since there is no absolute order on the credits!
     pub fn credits_since(&self, index: usize) -> Vec<Transfer> {
         self.account.credits_since(index)
     }
@@ -471,10 +477,10 @@ impl<V: ReplicaValidator> Actor<V> {
 }
 
 mod test {
-    use super::{Actor, ActorEvent, ReplicaValidator, Transfer, TransferInitiated};
+    use super::{Account, Actor, ActorEvent, ReplicaValidator, TransferInitiated};
     use crdts::Dot;
     use rand::Rng;
-    use safe_nd::{ClientFullId, Money, PublicKey};
+    use safe_nd::{ClientFullId, Money, PublicKey, Transfer};
     use threshold_crypto::{SecretKey, SecretKeySet};
 
     struct Validator {}
@@ -530,10 +536,10 @@ mod test {
         let sender = Dot::new(get_random_pk(), 0);
         let transfer = get_transfer(sender, client_pubkey, balance);
         let replica_validator = Validator {};
-        match Actor::new(client_id, transfer, replicas_id, replica_validator) {
-            None => panic!(),
-            Some(actor) => actor,
-        }
+        let mut account = Account::new(transfer.to);
+        account.append(transfer);
+        let actor = Actor::from_snapshot(account, client_id, replicas_id, replica_validator);
+        actor
     }
 
     fn get_transfer(from: Dot<PublicKey>, to: PublicKey, amount: Money) -> Transfer {

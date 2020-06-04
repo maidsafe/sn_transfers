@@ -389,14 +389,17 @@ mod test {
             to,
             amount,
         };
+
         let replica_validator = Validator {};
-        match Actor::new(client_id, transfer.clone(), replicas_id, replica_validator) {
-            None => panic!(),
-            Some(actor) => TestActor {
-                actor,
-                account_clone: Account::new(transfer),
-                replica_group,
-            },
+        let mut account = Account::new(transfer.to);
+        account.append(transfer);
+        let actor =
+            Actor::from_snapshot(account.clone(), client_id, replicas_id, replica_validator);
+
+        TestActor {
+            actor,
+            account_clone: account,
+            replica_group,
         }
     }
 
