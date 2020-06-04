@@ -289,9 +289,11 @@ impl Replica {
                     Some(account) => account.append(transfer),
                     None => {
                         // Creates if not exists.
-                        let _ = self.accounts.insert(transfer.to, Account::new(transfer));
+                        let mut account = Account::new(transfer.id.actor);
+                        account.append(transfer.clone());
+                        let _ = self.accounts.insert(transfer.to, account);
                     }
-                }
+                };
             }
         };
         // consider event log, to properly be able to reconstruct state from restart

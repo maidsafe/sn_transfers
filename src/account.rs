@@ -21,15 +21,13 @@ pub struct Account {
 
 impl Account {
     /// Creates a new account out of a credit.
-    pub fn new(first: Transfer) -> Self {
-        let mut transfer_ids = HashSet::new();
-        let _ = transfer_ids.insert(first.id);
+    pub fn new(id: AccountId) -> Self {
         Self {
-            id: first.to,
-            balance: first.amount,
-            credits: vec![first],
+            id,
+            balance: Money::zero(),
+            credits: vec![],
             debits: Default::default(),
-            transfer_ids,
+            transfer_ids: Default::default(),
         }
     }
 
@@ -111,7 +109,7 @@ mod test {
     use threshold_crypto::SecretKey;
 
     #[test]
-    fn creates_with_ctor_state() {
+    fn appends_credits() {
         // Arrange
         let balance = Money::from_nano(10);
         let first_credit = Transfer {
@@ -119,23 +117,29 @@ mod test {
             to: get_random_pk(),
             amount: balance,
         };
+        let mut account = Account::new(first_credit.to);
+        account.append(first_credit.clone());
+        let second_credit = Transfer {
+            id: Dot::new(get_random_pk(), 0),
+            to: first_credit.to,
+            amount: balance,
+        };
 
         // Act
-        let account = Account::new(first_credit.clone());
+        account.append(second_credit.clone());
         let credits = account.credits_since(0);
         let debits = account.debits_since(0);
-        let first_debit = Transfer {
+        let is_sequential = account.is_sequential(&Transfer {
             id: Dot::new(first_credit.to, 0),
             to: get_random_pk(),
             amount: balance,
-        };
-        let is_sequential = account.is_sequential(&first_debit);
+        });
 
         // Assert
-        assert!(account.contains(&first_credit.id));
-        assert!(account.balance() == balance);
-        assert!(credits.len() == 1);
-        assert!(credits[0] == first_credit);
+        assert!(account.contains(&second_credit.id));
+        assert!(account.balance() == balance.checked_add(balance).unwrap());
+        assert!(credits.len() == 2);
+        assert!(credits[1] == second_credit);
         assert!(debits.len() == 0);
         assert!(account.next_debit() == 0);
         assert!(is_sequential.is_ok() && is_sequential.unwrap());
@@ -150,7 +154,8 @@ mod test {
             to: get_random_pk(),
             amount: balance,
         };
-        let mut account = Account::new(first_credit.clone());
+        let mut account = Account::new(first_credit.to);
+        account.append(first_credit.clone());
         let first_debit = Transfer {
             id: Dot::new(first_credit.to, 0),
             to: get_random_pk(),
@@ -175,42 +180,6 @@ mod test {
         assert!(credits.len() == 1);
         assert!(credits[0] == first_credit);
         assert!(account.next_debit() == 1);
-        assert!(is_sequential.is_ok() && is_sequential.unwrap());
-    }
-
-    #[test]
-    fn appends_credits() {
-        // Arrange
-        let balance = Money::from_nano(10);
-        let first_credit = Transfer {
-            id: Dot::new(get_random_pk(), 0),
-            to: get_random_pk(),
-            amount: balance,
-        };
-        let mut account = Account::new(first_credit.clone());
-        let second_credit = Transfer {
-            id: Dot::new(get_random_pk(), 0),
-            to: first_credit.to,
-            amount: balance,
-        };
-
-        // Act
-        account.append(second_credit.clone());
-        let credits = account.credits_since(0);
-        let debits = account.debits_since(0);
-        let is_sequential = account.is_sequential(&Transfer {
-            id: Dot::new(first_credit.to, 0),
-            to: get_random_pk(),
-            amount: balance,
-        });
-
-        // Assert
-        assert!(account.contains(&second_credit.id));
-        assert!(account.balance() == balance.checked_add(balance).unwrap());
-        assert!(credits.len() == 2);
-        assert!(credits[1] == second_credit);
-        assert!(debits.len() == 0);
-        assert!(account.next_debit() == 0);
         assert!(is_sequential.is_ok() && is_sequential.unwrap());
     }
 
