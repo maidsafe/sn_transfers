@@ -190,7 +190,7 @@ mod test {
 
         let transfer = sender
             .actor
-            .initiate(sender.actor.balance(), recipient.actor.id())
+            .transfer(sender.actor.balance(), recipient.actor.id())
             .unwrap();
         sender
             .actor
