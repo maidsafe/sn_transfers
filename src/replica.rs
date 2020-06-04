@@ -237,9 +237,7 @@ impl Replica {
         debit_proof: &DebitAgreementProof,
     ) -> Result<TransferPropagated> {
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_propagated_proof(debit_proof).is_ok() {
-            return Err(Error::InvalidSignature);
-        }
+        let debiting_replicas = self.verify_propagated_proof(debit_proof)?;
         let transfer = &debit_proof.signed_transfer.transfer;
         let already_exists = match self.accounts.get(&transfer.to) {
             None => false,
@@ -250,9 +248,10 @@ impl Replica {
         } else {
             match self.sign_proof(&debit_proof) {
                 Err(_) => Err(Error::InvalidSignature),
-                Ok(replica_sig) => Ok(TransferPropagated {
+                Ok(crediting_replica_sig) => Ok(TransferPropagated {
                     debit_proof: debit_proof.clone(),
-                    replica_sig,
+                    debiting_replicas,
+                    crediting_replica_sig,
                 }),
             }
         }
@@ -354,7 +353,7 @@ impl Replica {
             Ok(data) => {
                 // Check if proof is signed by our peers.
                 let public_key = safe_nd::PublicKey::Bls(self.peer_replicas.public_key());
-                let result = public_key.verify(&proof.sender_replicas_sig, &data);
+                let result = public_key.verify(&proof.debiting_replicas_sig, &data);
                 if result.is_ok() {
                     return result;
                 }
@@ -366,17 +365,17 @@ impl Replica {
 
     /// Verify that this is a valid _propagated_
     /// DebitAgreementProof, i.e. signed by a group that we know of.
-    fn verify_propagated_proof(&self, proof: &DebitAgreementProof) -> Result<()> {
+    fn verify_propagated_proof(&self, proof: &DebitAgreementProof) -> Result<safe_nd::PublicKey> {
         // Check that the proof corresponds to a public key set of some Replicas.
         match bincode::serialize(&proof.signed_transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
                 // Check all known groups of Replicas.
                 for set in &self.other_groups {
-                    let public_key = safe_nd::PublicKey::Bls(set.public_key());
-                    let result = public_key.verify(&proof.sender_replicas_sig, &data);
+                    let debiting_replicas = safe_nd::PublicKey::Bls(set.public_key());
+                    let result = debiting_replicas.verify(&proof.debiting_replicas_sig, &data);
                     if result.is_ok() {
-                        return result;
+                        return Ok(debiting_replicas);
                     }
                 }
                 // If we don't know the public key this was signed with, we won't consider it valid.

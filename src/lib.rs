@@ -43,7 +43,7 @@ pub struct ReceivedCredit {
     /// The sender's aggregated Replica signatures of the sender debit.
     pub debit_proof: DebitAgreementProof,
     /// The public key of the signing Replicas.
-    pub signing_replicas: threshold_crypto::PublicKey,
+    pub debiting_replicas: safe_nd::PublicKey,
 }
 
 // ------------------------------------------------------------
@@ -56,7 +56,7 @@ pub struct ReceivedCredit {
 /// membership implementation.
 pub trait ReplicaValidator {
     /// Determines if a remote group of Replicas, represented by a PublicKey, is indeed valid.
-    fn is_valid(&self, replica_group: threshold_crypto::PublicKey) -> bool;
+    fn is_valid(&self, replica_group: safe_nd::PublicKey) -> bool;
 }
 
 /// Events raised by the Actor.
@@ -74,10 +74,21 @@ pub enum ActorEvent {
     TransferRegistrationSent(TransferRegistrationSent),
     /// Raised when the Actor has received
     /// unknown credits on querying Replicas.
-    CreditsReceived(CreditsReceived),
-    /// Raised when the Actor has received
-    /// unknown debits on querying Replicas.
-    DebitsReceived(DebitsReceived),
+    TransfersSynched(TransfersSynched),
+}
+
+/// Raised when the Actor has received
+/// f.ex. credits that its Replicas were holding upon
+/// the propagation of them from a remote group of Replicas,
+/// or unknown debits that its Replicas were holding
+/// upon the registration of them from another
+/// instance of the same Actor.
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+pub struct TransfersSynched {
+    /// Credits we don't have locally.
+    credits: Vec<ReceivedCredit>,
+    /// The debits we don't have locally.
+    debits: Vec<DebitAgreementProof>,
 }
 
 /// This event is raised by the Actor after having
@@ -107,29 +118,9 @@ pub struct TransferRegistrationSent {
     debit_proof: DebitAgreementProof,
 }
 
-/// Raised when the Actor has received
-/// credits that its Replicas were holding upon
-/// the propagation of them from a remote group of Replicas.
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct CreditsReceived {
-    /// Credits we don't have locally.
-    credits: Vec<ReceivedCredit>,
-}
-
-/// Raised when an Actor instance has received
-/// unknown debits that its Replicas were holding
-/// upon the registration of them from another
-/// instance of the same Actor.
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
-pub struct DebitsReceived {
-    /// The debits we don't have locally.
-    debits: Vec<DebitAgreementProof>,
-}
-
 mod test {
     use crate::{
-        actor::Actor, replica::Replica, Account, ActorEvent, ReceivedCredit, ReplicaEvent,
-        ReplicaValidator,
+        actor::Actor, replica::Replica, Account, ActorEvent, ReplicaEvent, ReplicaValidator,
     };
     use crdts::{
         quickcheck::{quickcheck, TestResult},
@@ -144,7 +135,7 @@ mod test {
     struct Validator {}
 
     impl ReplicaValidator for Validator {
-        fn is_valid(&self, replica_group: threshold_crypto::PublicKey) -> bool {
+        fn is_valid(&self, replica_group: PublicKey) -> bool {
             true
         }
     }
@@ -197,14 +188,12 @@ mod test {
             .apply(ActorEvent::TransferInitiated(transfer.clone()));
 
         let mut debit_proof = None;
-        let mut sender_replicas_pubkey = None;
 
         // --- Act ---
         // Validate at Sender Replicas
         match find_group(sender_index, &mut replica_groups) {
             None => panic!("group not found!"),
             Some(replica_group) => {
-                sender_replicas_pubkey = Some(replica_group.id.public_key());
                 for replica in &mut replica_group.replicas {
                     let validated = replica.validate(transfer.signed_transfer.clone()).unwrap();
                     replica.apply(ReplicaEvent::TransferValidated(validated.clone()));
@@ -252,7 +241,7 @@ mod test {
         }
 
         // Propagate to Recipient Replicas
-        let credits = replica_groups
+        let events: Vec<_> = replica_groups
             .iter_mut()
             .filter(|c| c.index == recipient_index)
             .map(|c| {
@@ -261,21 +250,16 @@ mod test {
                         .receive_propagated(&debit_proof.clone().unwrap())
                         .unwrap();
                     replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()));
-                    ReceivedCredit {
-                        debit_proof: propagated.debit_proof,
-                        signing_replicas: sender_replicas_pubkey.unwrap(),
-                    }
+                    ReplicaEvent::TransferPropagated(propagated.clone())
                 })
             })
             .flatten()
-            .collect::<HashSet<ReceivedCredit>>()
-            .into_iter()
-            .collect::<Vec<ReceivedCredit>>();
+            .collect();
 
-        let credits_received = recipient.actor.receive_credits(credits).unwrap();
+        let transfers = recipient.actor.synch(events).unwrap();
         recipient
             .actor
-            .apply(ActorEvent::CreditsReceived(credits_received));
+            .apply(ActorEvent::TransfersSynched(transfers));
 
         // --- Assert ---
 

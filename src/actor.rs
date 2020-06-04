@@ -7,14 +7,14 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::{
-    account::Account, ActorEvent, CreditsReceived, DebitsReceived, ReceivedCredit,
-    ReplicaValidator, TransferInitiated, TransferRegistrationSent, TransferValidated,
-    TransferValidationReceived,
+    account::Account, ActorEvent, ReceivedCredit, ReplicaValidator, TransferInitiated,
+    TransferRegistrationSent, TransferValidated, TransferValidationReceived, TransfersSynched,
 };
 use crdts::Dot;
+use itertools::Itertools;
 use safe_nd::{
-    AccountId, ClientFullId, DebitAgreementProof, Error, Money, Result, Signature, SignatureShare,
-    SignedTransfer, Transfer,
+    AccountId, ClientFullId, DebitAgreementProof, Error, Money, ReplicaEvent, Result, Signature,
+    SignatureShare, SignedTransfer, Transfer,
 };
 use std::collections::{BTreeMap, HashSet};
 use threshold_crypto::PublicKeySet;
@@ -197,7 +197,7 @@ impl<V: ReplicaValidator> Actor<V> {
                         if replicas.public_key().verify(&sig, data) {
                             proof = Some(DebitAgreementProof {
                                 signed_transfer: signed_transfer.clone(),
-                                sender_replicas_sig: safe_nd::Signature::Bls(sig),
+                                debiting_replicas_sig: safe_nd::Signature::Bls(sig),
                             });
                         } // else, we have some corrupt data
                     };
@@ -235,9 +235,35 @@ impl<V: ReplicaValidator> Actor<V> {
     /// What we do here is to use the passed in replica_validator, that injects the logic from upper layers
     /// for determining if this remote group of Replicas is indeed valid.
     /// It should consider our Replicas valid as well, for the rare cases when sender replicate to the same group.
-    pub fn receive_credits(&self, proofs: Vec<ReceivedCredit>) -> Result<CreditsReceived> {
-        let valid_credits = proofs
-            .iter()
+    ///
+    /// This also ensures that we receive transfers initiated at other Actor instances (same id or other,
+    /// i.e. with multiple instances of same Actor we can also sync debits made on other isntances).
+    /// Todo: This looks to be handling the case when there is a transfer in flight from this client
+    /// (i.e. self.next_debit_version has been incremented, but transfer not yet accumulated).
+    /// Just make sure this is 100% the case as well.
+    pub fn synch(&self, events: Vec<ReplicaEvent>) -> Result<TransfersSynched> {
+        let credits = self.validate_credits(&events);
+        let debits = self.validate_debits(events);
+
+        if credits.len() > 0 || debits.len() > 0 {
+            Ok(TransfersSynched { credits, debits })
+        } else {
+            Err(Error::InvalidOperation) // TODO: We need much better error types to inform about what is wrong.
+        }
+    }
+
+    fn validate_credits(&self, events: &Vec<ReplicaEvent>) -> Vec<ReceivedCredit> {
+        let valid_credits: Vec<_> = events
+            .into_iter()
+            .filter_map(|e| match e {
+                ReplicaEvent::TransferPropagated(e) => Some(e),
+                _ => None,
+            })
+            .unique_by(|e| e.debit_proof.signed_transfer.transfer.id)
+            .map(|e| ReceivedCredit {
+                debit_proof: e.debit_proof.clone(),
+                debiting_replicas: e.debiting_replicas,
+            })
             .filter(|p| self.verify_credit_proof(p).is_ok())
             .filter(|p| self.id == p.debit_proof.signed_transfer.transfer.to)
             .filter(|p| {
@@ -245,31 +271,24 @@ impl<V: ReplicaValidator> Actor<V> {
                     .account
                     .contains(&p.debit_proof.signed_transfer.transfer.id)
             })
-            .map(|p| p.clone())
-            .collect::<Vec<ReceivedCredit>>();
+            .collect();
 
-        if valid_credits.len() > 0 {
-            Ok(CreditsReceived {
-                credits: valid_credits,
-            })
-        } else {
-            Err(Error::InvalidOperation)
-        }
+        valid_credits
     }
 
-    /// Step xx. Continuously receiving debits from Replicas via push or pull model, decided by upper layer.
-    /// This ensures that we receive transfers initiated at other Actor instances (same id or other,
-    /// i.e. with multiple instances of same Actor we can also sync debits made on other isntances).
-    /// Todo: This looks to be handling the case when there is a transfer in flight from this client
-    /// (i.e. self.next_debit_version has been incremented, but transfer not yet accumulated).
-    /// Just make sure this is 100% the case as well.
-    pub fn receive_debits(&self, debits: Vec<DebitAgreementProof>) -> Result<DebitsReceived> {
-        let mut debits = debits
+    fn validate_debits(&self, events: Vec<ReplicaEvent>) -> Vec<DebitAgreementProof> {
+        let mut debits: Vec<_> = events
             .iter()
+            .filter_map(|e| match e {
+                ReplicaEvent::TransferRegistered(e) => Some(e),
+                _ => None,
+            })
+            .unique_by(|e| e.debit_proof.signed_transfer.transfer.id)
+            .map(|e| &e.debit_proof)
             .filter(|p| self.id == p.signed_transfer.transfer.id.actor)
             .filter(|p| p.signed_transfer.transfer.id.counter >= self.account.next_debit())
             .filter(|p| self.verify_debit_proof(p).is_ok())
-            .collect::<Vec<&DebitAgreementProof>>();
+            .collect();
 
         debits.sort_by_key(|t| t.signed_transfer.transfer.id.counter);
 
@@ -285,13 +304,7 @@ impl<V: ReplicaValidator> Actor<V> {
             iter += 1;
         }
 
-        if valid_debits.len() > 0 {
-            Ok(DebitsReceived {
-                debits: valid_debits,
-            })
-        } else {
-            Err(Error::InvalidOperation) // TODO: We need much better error types to inform about what is wrong.
-        }
+        valid_debits
     }
 
     /// -----------------------------------------------------------------
@@ -334,17 +347,21 @@ impl<V: ReplicaValidator> Actor<V> {
                 self.account.append(transfer);
                 self.accumulating_validations.clear();
             }
-            ActorEvent::CreditsReceived(e) => {
+            ActorEvent::TransfersSynched(e) => {
                 for credit in e.credits {
+                    // append credits _before_ debits
                     self.account
-                        .append(credit.debit_proof.signed_transfer.transfer); // append credit
+                        .append(credit.debit_proof.signed_transfer.transfer);
                 }
-            }
-            ActorEvent::DebitsReceived(e) => {
+                let any_debits = e.debits.len() > 0;
                 for proof in e.debits {
+                    // append debits _after_ credits
                     self.account.append(proof.signed_transfer.transfer);
                 }
-                self.next_debit_version = self.account.next_debit() - 1; // set the synchronisation counter.
+                if any_debits {
+                    // set the synchronisation counter
+                    self.next_debit_version = self.account.next_debit() - 1;
+                }
             }
         };
         // consider event log, to properly be able to reconstruct state from restart
@@ -413,24 +430,23 @@ impl<V: ReplicaValidator> Actor<V> {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
                 let public_key = safe_nd::PublicKey::Bls(self.replicas.public_key());
-                public_key.verify(&proof.sender_replicas_sig, &data)
+                public_key.verify(&proof.debiting_replicas_sig, &data)
             }
         }
     }
 
     /// Verify that this is a valid ReceivedCredit.
     fn verify_credit_proof(&self, credit: &ReceivedCredit) -> Result<()> {
-        if !self.replica_validator.is_valid(credit.signing_replicas) {
+        if !self.replica_validator.is_valid(credit.debiting_replicas) {
             return Err(Error::InvalidSignature);
         }
         let proof = &credit.debit_proof;
         // Check that the proof corresponds to a/the public key set of our Replicas.
         match bincode::serialize(&proof.signed_transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
-            Ok(data) => {
-                let public_key = safe_nd::PublicKey::Bls(credit.signing_replicas);
-                public_key.verify(&proof.sender_replicas_sig, &data)
-            }
+            Ok(data) => credit
+                .debiting_replicas
+                .verify(&proof.debiting_replicas_sig, &data),
         }
     }
 
@@ -464,7 +480,7 @@ mod test {
     struct Validator {}
 
     impl ReplicaValidator for Validator {
-        fn is_valid(&self, replica_group: threshold_crypto::PublicKey) -> bool {
+        fn is_valid(&self, replica_group: PublicKey) -> bool {
             true
         }
     }
