@@ -18,7 +18,7 @@ version = "0.1.0"
 bincode = "=1.1.4"
 safe-nd = { git = "https://github.com/oetyng/safe-nd.git", branch = "at2-network-payments" }
 serde = { version = "~1.0.97", features = ["derive"] }
-crdts = { git = "https://github.com/rust-crdt/rust-crdt", branch = "useability-improvements" }
+crdts = { git = "https://github.com/rust-crdt/rust-crdt", rev= "eab41f7" }
 threshold_crypto = "~0.3.2"
 rand = "~0.6.5"
 

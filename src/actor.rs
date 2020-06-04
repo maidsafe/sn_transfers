@@ -40,7 +40,7 @@ pub struct Actor<V: ReplicaValidator> {
     account: Account,
     /// Ensures that the actor's transfer
     /// initiations (ValidateTransfer cmd) are sequential.
-    current_debit_version: Option<u64>,
+    next_debit_version: u64,
     /// When a transfer is initiated, validations are accumulated here.
     /// After quorum is reached and proof produced, the set is cleared.
     accumulating_validations: BTreeMap<PublicKeySet, HashSet<TransferValidated>>,
@@ -75,7 +75,7 @@ impl<V: ReplicaValidator> Actor<V> {
             replicas,
             replica_validator,
             account: Account::new(transfer),
-            current_debit_version: None,
+            next_debit_version: 0,
             accumulating_validations: Default::default(),
         })
     }
@@ -111,29 +111,19 @@ impl<V: ReplicaValidator> Actor<V> {
     /// -----------------------------------------------------------------
 
     /// Step 1. Build a valid cmd for validation of a debit.
-    pub fn initiate(&self, amount: Money, to: AccountId) -> Result<TransferInitiated> {
+    pub fn transfer(&self, amount: Money, to: AccountId) -> Result<TransferInitiated> {
         if to == self.id {
             return Err(Error::InvalidOperation); // "Sender and recipient are the same"
         }
 
         let id = Dot::new(self.id, self.account.next_debit());
 
-        match self.current_debit_version {
-            None => {
-                if id.counter != 0 {
-                    return Err(Error::InvalidOperation); // "out of order msg"
-                }
-            }
-            Some(current_debit) => {
-                let next_debit = current_debit + 1;
-                if next_debit != self.account.next_debit() {
-                    // ensures one debit is completed at a time
-                    return Err(Error::InvalidOperation); // "current pending debit has not been completed"
-                }
-                if next_debit != id.counter {
-                    return Err(Error::InvalidOperation); // "either already proposed or out of order debit"
-                }
-            }
+        // ensures one debit is completed at a time
+        if self.next_debit_version != self.account.next_debit() {
+            return Err(Error::InvalidOperation); // "current pending debit has not been completed"
+        }
+        if self.next_debit_version != id.counter {
+            return Err(Error::InvalidOperation); // "either already proposed or out of order debit"
         }
         if amount > self.balance() {
             // println!("{} does not have enough money to transfer {} to {}. (balance: {})"
@@ -164,13 +154,8 @@ impl<V: ReplicaValidator> Actor<V> {
             return Err(Error::InvalidOperation); // "validation is not intended for this actor"
         }
         // check if expected this validation
-        match self.current_debit_version {
-            None => return Err(Error::InvalidOperation), // "there is no pending transfer, cannot receive validations"
-            Some(version) => {
-                if version != signed_transfer.transfer.id.counter {
-                    return Err(Error::InvalidOperation); // "out of order validation"
-                }
-            }
+        if self.next_debit_version != signed_transfer.transfer.id.counter {
+            return Err(Error::InvalidOperation); // "out of order validation"
         }
         // check if already received
         for (_, validations) in &self.accumulating_validations {
@@ -275,10 +260,14 @@ impl<V: ReplicaValidator> Actor<V> {
     /// Step xx. Continuously receiving debits from Replicas via push or pull model, decided by upper layer.
     /// This ensures that we receive transfers initiated at other Actor instances (same id or other,
     /// i.e. with multiple instances of same Actor we can also sync debits made on other isntances).
+    /// Todo: This looks to be handling the case when there is a transfer in flight from this client
+    /// (i.e. self.next_debit_version has been incremented, but transfer not yet accumulated).
+    /// Just make sure this is 100% the case as well.
     pub fn receive_debits(&self, debits: Vec<DebitAgreementProof>) -> Result<DebitsReceived> {
         let mut debits = debits
             .iter()
             .filter(|p| self.id == p.signed_transfer.transfer.id.actor)
+            .filter(|p| p.signed_transfer.transfer.id.counter >= self.account.next_debit())
             .filter(|p| self.verify_debit_proof(p).is_ok())
             .collect::<Vec<&DebitAgreementProof>>();
 
@@ -316,7 +305,7 @@ impl<V: ReplicaValidator> Actor<V> {
         match event {
             ActorEvent::TransferInitiated(e) => {
                 let transfer = e.signed_transfer.transfer;
-                self.current_debit_version = Some(transfer.id.counter);
+                self.next_debit_version = transfer.id.counter;
             }
             ActorEvent::TransferValidationReceived(e) => {
                 if let Some(_) = e.proof {
@@ -355,6 +344,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 for proof in e.debits {
                     self.account.append(proof.signed_transfer.transfer);
                 }
+                self.next_debit_version = self.account.next_debit() - 1; // set the synchronisation counter.
             }
         };
         // consider event log, to properly be able to reconstruct state from restart
@@ -508,7 +498,7 @@ mod test {
     }
 
     fn get_debit(actor: &Actor<Validator>) -> TransferInitiated {
-        match actor.initiate(Money::from_nano(10), get_random_pk()) {
+        match actor.transfer(Money::from_nano(10), get_random_pk()) {
             Ok(event) => event,
             Err(_) => panic!(),
         }
