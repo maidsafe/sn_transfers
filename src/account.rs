@@ -31,6 +31,10 @@ impl Account {
         }
     }
 
+    pub fn id(&self) -> AccountId {
+        self.id
+    }
+
     /// Query for next version.
     pub fn next_debit(&self) -> u64 {
         self.debits.len() as u64
