@@ -147,24 +147,24 @@ mod test {
 
     #[test]
     fn basic_transfer() {
-        let _ = transfer_between_replica_groups(100, 10, 2, 3, 0, 1);
+        let _ = transfer_between_actors(100, 10, 2, 3, 0, 1);
     }
 
     // #[test]
     // fn reproduce_quickcheck_basic_transfer() {
-    //     let _ = transfer_between_replica_groups(1, 0, 2, 4, 0, 1);
+    //     let _ = transfer_between_actors(1, 0, 2, 4, 0, 1);
     // }
 
     #[test]
     fn quickcheck_basic_transfer() {
-        quickcheck(transfer_between_replica_groups as fn(u64, u64, u8, u8, u8, u8) -> TestResult);
+        quickcheck(transfer_between_actors as fn(u64, u64, u8, u8, u8, u8) -> TestResult);
     }
 
     // ------------------------------------------------------------------------
     // ------------------------ Basic Transfer Body ---------------------------
     // ------------------------------------------------------------------------
 
-    fn transfer_between_replica_groups(
+    fn transfer_between_actors(
         sender_balance: u64,
         recipient_balance: u64,
         group_count: u8,
@@ -185,69 +185,57 @@ mod test {
 
         // --- Arrange ---
         let recipient_final = sender_balance + recipient_balance;
-
         let mut account_configs =
             hashmap![sender_index => sender_balance, recipient_index => recipient_balance];
         let (_, mut actors) = get_network(group_count, replica_count, account_configs);
         let mut sender = actors.remove(&sender_index).unwrap();
         let mut recipient = actors.remove(&recipient_index).unwrap();
 
-        let transfer = sender
-            .actor
-            .transfer(sender.actor.balance(), recipient.actor.id())
-            .unwrap();
-
-        sender
-            .actor
-            .apply(ActorEvent::TransferInitiated(transfer.clone()));
-
         // --- Act ---
-
-        // 1. Validate at Sender Replicas
-        let debit_proof = validate_at_sender_replicas(transfer, &mut sender);
-
-        // 2. Register at Sender Replicas
-        register_at_debiting_replicas(debit_proof.clone().unwrap(), &mut sender.replica_group);
-
-        // 3. Propagate to Recipient Replicas
-        let events = propagate_to_crediting_replicas(
-            debit_proof.clone().unwrap(),
-            &mut recipient.replica_group,
-        );
-
-        // 4. Synch at recipient.
+        // 1. Init transfer at Sender Actor.
+        let transfer = init_transfer(&mut sender, recipient.actor.id());
+        // 2. Validate at Sender Replicas.
+        let debit_proof = validate_at_sender_replicas(transfer, &mut sender).unwrap();
+        // 3. Register at Sender Replicas.
+        register_at_debiting_replicas(&debit_proof, &mut sender.replica_group);
+        // 4. Propagate to Recipient Replicas.
+        let events = propagate_to_crediting_replicas(&debit_proof, &mut recipient.replica_group);
+        // 5. Synch at Recipient Actor.
         synch(&mut recipient, events);
 
         // --- Assert ---
-
-        // Actor has correct balance
-        assert!(sender.actor.balance() == Money::zero());
-        assert!(recipient.actor.balance() == Money::from_nano(recipient_final));
-
-        // Replicas of the sender have correct balance
-        sender
-            .replica_group
-            .replicas
-            .iter()
-            .map(|replica| replica.balance(&sender.actor.id()).unwrap())
-            .for_each(|balance| assert!(balance == Money::zero()));
-
-        // Replicas of the recipient have correct balance
-        recipient
-            .replica_group
-            .replicas
-            .iter()
-            .map(|replica| replica.balance(&recipient.actor.id()).unwrap())
-            .for_each(|balance| assert!(balance == Money::from_nano(recipient_final)));
-
+        // Actor and Replicas have the correct balance.
+        assert_balance(sender, Money::zero());
+        assert_balance(recipient, Money::from_nano(recipient_final));
         TestResult::passed()
+    }
+
+    fn assert_balance(actor: TestActor, amount: Money) {
+        assert!(actor.actor.balance() == amount);
+        actor
+            .replica_group
+            .replicas
+            .iter()
+            .map(|replica| replica.balance(&actor.actor.id()).unwrap())
+            .for_each(|balance| assert!(balance == amount));
     }
 
     // ------------------------------------------------------------------------
     // ------------------------ AT2 Steps -------------------------------------
     // ------------------------------------------------------------------------
 
-    /// Step 1: Validate transfer.
+    // 1. Init debit at Sender Actor.
+    fn init_transfer(sender: &mut TestActor, to: AccountId) -> TransferInitiated {
+        let transfer = sender.actor.transfer(sender.actor.balance(), to).unwrap();
+
+        sender
+            .actor
+            .apply(ActorEvent::TransferInitiated(transfer.clone()));
+
+        transfer
+    }
+
+    // 2. Validate debit at Sender Replicas.
     fn validate_at_sender_replicas(
         transfer: TransferInitiated,
         sender: &mut TestActor,
@@ -270,33 +258,34 @@ mod test {
         return None;
     }
 
-    /// Step 2: Register transfer.
+    // 3. Register debit at Sender Replicas.
     fn register_at_debiting_replicas(
-        debit_proof: DebitAgreementProof,
+        debit_proof: &DebitAgreementProof,
         replica_group: &mut ReplicaGroup,
     ) {
         for replica in &mut replica_group.replicas {
-            let registered = replica.register(&debit_proof).unwrap();
+            let registered = replica.register(debit_proof).unwrap();
             replica.apply(ReplicaEvent::TransferRegistered(registered));
         }
     }
 
-    /// Step 3: Propagate transfer.
+    // 4. Propagate credit to Recipient Replicas.
     fn propagate_to_crediting_replicas(
-        debit_proof: DebitAgreementProof,
+        debit_proof: &DebitAgreementProof,
         replica_group: &mut ReplicaGroup,
     ) -> Vec<ReplicaEvent> {
         replica_group
             .replicas
             .iter_mut()
             .map(|replica| {
-                let propagated = replica.receive_propagated(&debit_proof).unwrap();
+                let propagated = replica.receive_propagated(debit_proof).unwrap();
                 replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()));
                 ReplicaEvent::TransferPropagated(propagated.clone())
             })
             .collect()
     }
 
+    // 5. Synch at Recipient Actor.
     fn synch(recipient: &mut TestActor, events: Vec<ReplicaEvent>) {
         let transfers = recipient.actor.synch(events).unwrap();
         recipient
