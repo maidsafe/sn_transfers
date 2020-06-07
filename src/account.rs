@@ -104,6 +104,21 @@ impl Account {
             panic!("Transfer does not belong to this account")
         }
     }
+
+    /// Test-helper API to simulate Client Transfers.
+    #[cfg(feature = "simulated-payouts")]
+    pub fn simulated_append(&mut self, transfer: Transfer) {
+        if self.id == transfer.id.actor {
+            match self.balance.checked_add(transfer.amount) {
+                Some(amount) => self.balance = amount,
+                None => panic!("overflow when adding!"),
+            }
+            let _ = self.transfer_ids.insert(transfer.id);
+            self.credits.push(transfer);
+        } else {
+            panic!("Transfer does not belong to this account")
+        }
+    }
 }
 
 mod test {
