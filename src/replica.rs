@@ -297,11 +297,18 @@ impl Replica {
         // consider event log, to properly be able to reconstruct state from restart
     }
 
-    /// Test-helper API to test Client Transfers.
-    #[cfg(features = "simulated-payouts")]
+    /// Test-helper API to simulate Client Transfers.
+    #[cfg(feature = "simulated-payouts")]
     pub fn apply_without_proof(&mut self, transfer: Transfer) {
-        let acc = transfer.to;
-        self.accounts.get_mut(&acc).unwrap().append(transfer);
+        match self.accounts.get_mut(&transfer.to) {
+            Some(account) => account.simulated_append(transfer),
+            None => {
+                // Creates if it doesn't exist.
+                let mut account = Account::new(transfer.id.actor);
+                account.simulated_append(transfer.clone());
+                let _ = self.accounts.insert(transfer.to, account);
+            }
+        };
     }
 
     /// -----------------------------------------------------------------
