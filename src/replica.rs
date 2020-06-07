@@ -297,6 +297,13 @@ impl Replica {
         // consider event log, to properly be able to reconstruct state from restart
     }
 
+    /// Test-helper API to test Client Transfers.
+    #[cfg(features = "simulated-payouts")]
+    pub fn apply_without_proof(&mut self, transfer: Transfer) {
+        let acc = transfer.to;
+        self.accounts.get_mut(&acc).unwrap().append(transfer);
+    }
+
     /// -----------------------------------------------------------------
     /// ---------------------- Private methods --------------------------
     /// -----------------------------------------------------------------
