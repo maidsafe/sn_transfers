@@ -146,8 +146,7 @@ impl Replica {
         &self,
         signed_transfer: SignedTransfer,
     ) -> Result<TransferValidated> {
-        let id = signed_transfer.transfer.id;
-        if id.actor == signed_transfer.transfer.to {
+        if signed_transfer.from() == signed_transfer.to() {
             Err(Error::InvalidOperation)
         } else {
             match self.sign_validated_transfer(&signed_transfer) {
@@ -171,10 +170,10 @@ impl Replica {
         if transfer.id.actor == transfer.to {
             return Err(Error::InvalidOperation); // "Sender and recipient are the same"
         }
-        if !self.accounts.contains_key(&transfer.id.actor) {
+        if !self.accounts.contains_key(&signed_transfer.from()) {
             return Err(Error::NoSuchSender); // "{} sender does not exist (trying to transfer {} to {})."
         }
-        match self.pending_debits.get(&transfer.id.actor) {
+        match self.pending_debits.get(&signed_transfer.from()) {
             None => {
                 if transfer.id.counter != 0 {
                     return Err(Error::InvalidOperation); // "either already proposed or out of order msg"
@@ -186,7 +185,7 @@ impl Replica {
                 }
             }
         }
-        match self.balance(&transfer.id.actor) {
+        match self.balance(&signed_transfer.from()) {
             Some(balance) => {
                 if transfer.amount > balance {
                     return Err(Error::InsufficientBalance); // "{} does not have enough money to transfer {} to {}. (balance: {})"
@@ -212,7 +211,7 @@ impl Replica {
             return Err(Error::InvalidSignature);
         }
         let transfer = &debit_proof.signed_transfer.transfer;
-        let sender = self.accounts.get(&transfer.id.actor);
+        let sender = self.accounts.get(&debit_proof.from());
         match sender {
             None => Err(Error::NoSuchSender),
             Some(history) => match history.is_sequential(transfer) {
@@ -238,10 +237,9 @@ impl Replica {
     ) -> Result<TransferPropagated> {
         // Always verify signature first! (as to not leak any information).
         let debiting_replicas = self.verify_propagated_proof(debit_proof)?;
-        let transfer = &debit_proof.signed_transfer.transfer;
-        let already_exists = match self.accounts.get(&transfer.to) {
+        let already_exists = match self.accounts.get(&debit_proof.to()) {
             None => false,
-            Some(history) => history.contains(&transfer.id),
+            Some(history) => history.contains(&debit_proof.id()),
         };
         if already_exists {
             Err(Error::TransferIdExists)
@@ -333,9 +331,7 @@ impl Replica {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
                 let actor_sig = signed_transfer
-                    .transfer
-                    .id
-                    .actor
+                    .from()
                     .verify(&signed_transfer.actor_signature, data);
                 if actor_sig.is_ok() {
                     Ok(())

@@ -265,18 +265,14 @@ impl<V: ReplicaValidator> Actor<V> {
                 ReplicaEvent::TransferPropagated(e) => Some(e),
                 _ => None,
             })
-            .unique_by(|e| e.debit_proof.signed_transfer.transfer.id)
+            .unique_by(|e| e.id())
             .map(|e| ReceivedCredit {
                 debit_proof: e.debit_proof.clone(),
                 debiting_replicas: e.debiting_replicas,
             })
-            .filter(|p| self.verify_credit_proof(p).is_ok())
-            .filter(|p| self.id == p.debit_proof.signed_transfer.transfer.to)
-            .filter(|p| {
-                !self
-                    .account
-                    .contains(&p.debit_proof.signed_transfer.transfer.id)
-            })
+            .filter(|credit| self.verify_credit_proof(credit).is_ok())
+            .filter(|credit| self.id == credit.to())
+            .filter(|credit| !self.account.contains(&credit.id()))
             .collect();
 
         valid_credits
@@ -289,19 +285,19 @@ impl<V: ReplicaValidator> Actor<V> {
                 ReplicaEvent::TransferRegistered(e) => Some(e),
                 _ => None,
             })
-            .unique_by(|e| e.debit_proof.signed_transfer.transfer.id)
+            .unique_by(|e| e.id())
             .map(|e| &e.debit_proof)
-            .filter(|p| self.id == p.signed_transfer.transfer.id.actor)
-            .filter(|p| p.signed_transfer.transfer.id.counter >= self.account.next_debit())
-            .filter(|p| self.verify_debit_proof(p).is_ok())
+            .filter(|debit| self.id == debit.from())
+            .filter(|debit| debit.id().counter >= self.account.next_debit())
+            .filter(|debit| self.verify_debit_proof(debit).is_ok())
             .collect();
 
-        debits.sort_by_key(|t| t.signed_transfer.transfer.id.counter);
+        debits.sort_by_key(|t| t.id().counter);
 
         let mut iter = 0;
         let mut valid_debits = vec![];
         for out in debits {
-            let version = out.signed_transfer.transfer.id.counter;
+            let version = out.id().counter;
             let expected_version = iter + self.account.next_debit();
             if version != expected_version {
                 break; // since it's sorted, if first is not matching, then no point continuing
@@ -323,8 +319,7 @@ impl<V: ReplicaValidator> Actor<V> {
     pub fn apply(&mut self, event: ActorEvent) {
         match event {
             ActorEvent::TransferInitiated(e) => {
-                let transfer = e.signed_transfer.transfer;
-                self.next_debit_version = transfer.id.counter;
+                self.next_debit_version = e.id().counter;
             }
             ActorEvent::TransferValidationReceived(e) => {
                 if let Some(_) = e.proof {
@@ -349,8 +344,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 }
             }
             ActorEvent::TransferRegistrationSent(e) => {
-                let transfer = e.debit_proof.signed_transfer.transfer;
-                self.account.append(transfer);
+                self.account.append(e.debit_proof.signed_transfer.transfer);
                 self.accumulating_validations.clear();
             }
             ActorEvent::TransfersSynched(e) => {
