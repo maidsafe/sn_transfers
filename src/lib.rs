@@ -33,7 +33,10 @@ pub use self::{
     account::Account, actor::Actor as TransferActor, replica::Replica as TransferReplica,
 };
 
-use safe_nd::{DebitAgreementProof, ReplicaEvent, SignedTransfer, TransferValidated};
+use safe_nd::{
+    DebitAgreementProof, Money, PublicKey, ReplicaEvent, SignedTransfer, TransferId,
+    TransferValidated,
+};
 use serde::{Deserialize, Serialize};
 
 /// A received credit, contains the DebitAgreementProof from the sender Replicas,
@@ -43,7 +46,29 @@ pub struct ReceivedCredit {
     /// The sender's aggregated Replica signatures of the sender debit.
     pub debit_proof: DebitAgreementProof,
     /// The public key of the signing Replicas.
-    pub debiting_replicas: safe_nd::PublicKey,
+    pub debiting_replicas: PublicKey,
+}
+
+impl ReceivedCredit {
+    /// Get the transfer id
+    pub fn id(&self) -> TransferId {
+        self.debit_proof.id()
+    }
+
+    /// Get the amount of this transfer
+    pub fn amount(&self) -> Money {
+        self.debit_proof.amount()
+    }
+
+    /// Get the recipient of this transfer
+    pub fn from(&self) -> PublicKey {
+        self.debit_proof.from()
+    }
+
+    /// Get the recipient of this transfer
+    pub fn to(&self) -> PublicKey {
+        self.debit_proof.to()
+    }
 }
 
 // ------------------------------------------------------------
@@ -56,7 +81,7 @@ pub struct ReceivedCredit {
 /// membership implementation.
 pub trait ReplicaValidator {
     /// Determines if a remote group of Replicas, represented by a PublicKey, is indeed valid.
-    fn is_valid(&self, replica_group: safe_nd::PublicKey) -> bool;
+    fn is_valid(&self, replica_group: PublicKey) -> bool;
 }
 
 /// Events raised by the Actor.
@@ -96,7 +121,15 @@ pub struct TransfersSynched {
 /// Replicas for validation.
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
 pub struct TransferInitiated {
+    /// The transfer signed by the initiating Actor.
     pub signed_transfer: SignedTransfer,
+}
+
+impl TransferInitiated {
+    /// Get the transfer id
+    pub fn id(&self) -> TransferId {
+        self.signed_transfer.id()
+    }
 }
 
 /// Raised when a Replica responds with
