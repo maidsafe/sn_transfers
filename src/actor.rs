@@ -52,10 +52,14 @@ pub struct Actor<V: ReplicaValidator> {
 }
 
 impl<V: ReplicaValidator> Actor<V> {
-    /// Pass in the first credit.
-    /// Without it, there is no Actor, since there is no balance.
-    /// There is no essential validations here, since without a valid transfer
-    /// this Actor can't really convince Replicas to do anything.
+    /// Use this ctor for a new instance,
+    /// or to rehydrate from events ([see the synch method](Actor::synch)).
+    /// Pass in the key set of the replicas of this actor, i.e. our replicas.
+    /// Credits to our account are most likely debited at other replicas than our own (the sender's replicas),
+    /// The replica_validator lets upper layer decide how to validate those remote replicas (i.e. not our replicas).
+    /// If upper layer trusts them, the validator might do nothing but return "true".
+    /// If it wants to execute some logic for verifying that the remote replicas are in fact part of the system,
+    /// before accepting credits, it then implements that in the replica_validator.
     pub fn new(client_safe_key: SafeKey, replicas: PublicKeySet, replica_validator: V) -> Actor<V> {
         let id = client_safe_key.public_key();
         Actor {
@@ -205,7 +209,7 @@ impl<V: ReplicaValidator> Actor<V> {
                                 signed_transfer: signed_transfer.clone(),
                                 debiting_replicas_sig: safe_nd::Signature::Bls(sig),
                             });
-                        } // else, we have some corrupt data
+                        } // else, we have some corrupt data. (todo: Do we need to act on that fact?)
                     };
                 }
             }
@@ -214,7 +218,9 @@ impl<V: ReplicaValidator> Actor<V> {
         Ok(TransferValidationReceived { validation, proof })
     }
 
-    /// Step 3. xxxx for registration of an agreed transfer.
+    /// Step 3. Registration of an agreed transfer.
+    /// (The actual sending of the registration over the wire is done by upper layer,
+    /// only after that, the event is applied to the actor instance.)
     pub fn register(&self, debit_proof: DebitAgreementProof) -> Result<TransferRegistrationSent> {
         // Always verify signature first! (as to not leak any information).
         if !self.verify_debit_proof(&debit_proof).is_ok() {
