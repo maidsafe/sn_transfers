@@ -123,20 +123,19 @@ impl<V: ReplicaValidator> Actor<V> {
     /// Step 1. Build a valid cmd for validation of a debit.
     pub fn transfer(&self, amount: Money, to: AccountId) -> Result<TransferInitiated> {
         if to == self.id {
-            return Err(Error::InvalidOperation); // "Sender and recipient are the same"
+            return Err(Error::from("Sender and recipient are the same"));
         }
 
         let id = Dot::new(self.id, self.account.next_debit());
 
         // ensures one debit is completed at a time
         if self.next_debit_version != self.account.next_debit() {
-            return Err(Error::InvalidOperation); // "current pending debit has not been completed"
+            return Err(Error::from("Current pending debit has not been completed"));
         }
         if self.next_debit_version != id.counter {
-            return Err(Error::InvalidOperation); // "either already proposed or out of order debit"
+            return Err(Error::from("Debit already proposed or out of order"));
         }
         if amount > self.balance() {
-            // println!("{} does not have enough money to transfer {} to {}. (balance: {})"
             return Err(Error::InsufficientBalance);
         }
         let transfer = Transfer { id, to, amount };
@@ -161,16 +160,16 @@ impl<V: ReplicaValidator> Actor<V> {
         let signed_transfer = &validation.signed_transfer;
         // check if validation was initiated by this actor
         if self.id != signed_transfer.transfer.id.actor {
-            return Err(Error::InvalidOperation); // "validation is not intended for this actor"
+            return Err(Error::from("Validation not intended for this actor")); // "validation is not intended for this actor"
         }
         // check if expected this validation
         if self.next_debit_version != signed_transfer.transfer.id.counter {
-            return Err(Error::InvalidOperation); // "out of order validation"
+            return Err(Error::from("Out of order validation"));
         }
         // check if already received
         for (_, validations) in &self.accumulating_validations {
             if validations.contains(&validation) {
-                return Err(Error::InvalidOperation); // "Already received validation"
+                return Err(Error::from("Already received validation"));
             }
         }
 
@@ -234,7 +233,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 if is_sequential {
                     Ok(TransferRegistrationSent { debit_proof })
                 } else {
-                    Err(Error::InvalidOperation) // "Non-sequential operation"
+                    Err(Error::from("Non-sequential opertaion")) // "Non-sequential operation"
                 }
             }
             Err(_) => Err(Error::InvalidOperation), // from this place this code won't happen, but account validates the transfer is actually debits from it's owner.
@@ -260,7 +259,7 @@ impl<V: ReplicaValidator> Actor<V> {
         if credits.len() > 0 || debits.len() > 0 {
             Ok(TransfersSynched { credits, debits })
         } else {
-            Err(Error::InvalidOperation) // TODO: We need much better error types to inform about what is wrong.
+            Err(Error::from("No credits or debits found to sync to actor"))
         }
     }
 
@@ -447,6 +446,7 @@ impl<V: ReplicaValidator> Actor<V> {
             return Err(Error::InvalidSignature);
         }
         let proof = &credit.debit_proof;
+
         // Check that the proof corresponds to a/the public key set of our Replicas.
         match bincode::serialize(&proof.signed_transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
