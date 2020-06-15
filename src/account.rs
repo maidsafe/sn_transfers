@@ -55,7 +55,7 @@ impl Account {
     pub fn is_sequential(&self, transfer: &Transfer) -> Result<bool> {
         let id = transfer.id;
         if id.actor != self.id {
-            Err(Error::InvalidOperation)
+            Err(Error::from("Operation is non-sequential"))
         } else {
             match self.debits.last() {
                 None => Ok(id.counter == 0), // if no debits have been made, transfer counter must be 0

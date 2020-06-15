@@ -147,7 +147,7 @@ impl Replica {
         signed_transfer: SignedTransfer,
     ) -> Result<TransferValidated> {
         if signed_transfer.from() == signed_transfer.to() {
-            Err(Error::InvalidOperation)
+            Err(Error::from("Sending from and to the same account"))
         } else {
             match self.sign_validated_transfer(&signed_transfer) {
                 Err(_) => Err(Error::InvalidSignature),
@@ -168,7 +168,7 @@ impl Replica {
             return Err(Error::InvalidSignature);
         }
         if transfer.id.actor == transfer.to {
-            return Err(Error::InvalidOperation); // "Sender and recipient are the same"
+            return Err(Error::from("Sender and recipient are the same."));
         }
         if !self.accounts.contains_key(&signed_transfer.from()) {
             return Err(Error::NoSuchSender); // "{} sender does not exist (trying to transfer {} to {})."
@@ -176,12 +176,12 @@ impl Replica {
         match self.pending_debits.get(&signed_transfer.from()) {
             None => {
                 if transfer.id.counter != 0 {
-                    return Err(Error::InvalidOperation); // "either already proposed or out of order msg"
+                    return Err(Error::from("either already proposed or out of order msg"));
                 }
             }
             Some(value) => {
                 if transfer.id.counter != (value + 1) {
-                    return Err(Error::InvalidOperation); // "either already proposed or out of order msg"
+                    return Err(Error::from("either already proposed or out of order msg"));
                 }
             }
         }
@@ -221,7 +221,7 @@ impl Replica {
                             debit_proof: debit_proof.clone(),
                         })
                     } else {
-                        Err(Error::InvalidOperation) // "Non-sequential operation"
+                        Err(Error::from("Non-sequential operation"))
                     }
                 }
                 Err(_) => Err(Error::InvalidOperation), // from this place this code won't happen, but history validates the transfer is actually debits from it's owner.
