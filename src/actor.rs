@@ -180,7 +180,7 @@ impl<V: ReplicaValidator> Actor<V> {
             
             };
 
-          
+            Ok(request)
             // TODO: do we need to sign this?
             // match self.sign(&transfer) {
             //     Ok(actor_signature) => {
