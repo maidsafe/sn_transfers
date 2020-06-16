@@ -14,7 +14,7 @@ use crdts::Dot;
 use itertools::Itertools;
 use safe_nd::{
     AccountId, DebitAgreementProof, Error, Money, ReplicaEvent, Result, SafeKey, Signature,
-    SignatureShare, SignedTransfer, Transfer,
+    SignatureShare, SignedTransfer, Transfer, LoginPacketRequest, LoginPacket
 };
 use std::collections::{BTreeMap, HashSet};
 use threshold_crypto::PublicKeySet;
@@ -150,6 +150,49 @@ impl<V: ReplicaValidator> Actor<V> {
             Err(e) => Err(e),
         }
     }
+
+        /// Step 1. Build a valid cmd for validation of a debit.
+        pub fn build_login_packet_for_request(&self, amount: Money, new_owner: AccountId, new_login_packet: LoginPacket) -> Result<LoginPacketRequest> {
+            if new_owner == self.id {
+                // Q: Should this be an error?
+                return Err(Error::from("Sender and recipient are the same"));
+            }
+    
+            let id = Dot::new(self.id, self.account.next_debit());
+    
+            // ensures one debit is completed at a time
+            if self.next_debit_version != self.account.next_debit() {
+                return Err(Error::from("Current pending debit has not been completed"));
+            }
+            if self.next_debit_version != id.counter {
+                return Err(Error::from("Debit already proposed or out of order"));
+            }
+
+            // Q: What is the amount here???
+            if amount > self.balance() {
+                return Err(Error::InsufficientBalance);
+            }
+            let request = LoginPacketRequest::CreateFor { 
+                transfer_id: id, 
+                new_owner, 
+                amount,
+                new_login_packet
+            
+            };
+
+          
+            // TODO: do we need to sign this?
+            // match self.sign(&transfer) {
+            //     Ok(actor_signature) => {
+            //         let signed_transfer = SignedTransfer {
+            //             transfer,
+            //             actor_signature,
+            //         };
+            //         Ok(TransferInitiated { signed_transfer })
+            //     }
+            //     Err(e) => Err(e),
+            // }
+        }
 
     /// Step 2. Receive validations from Replicas, aggregate the signatures.
     pub fn receive(&self, validation: TransferValidated) -> Result<TransferValidationReceived> {
