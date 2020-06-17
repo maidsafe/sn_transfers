@@ -152,7 +152,7 @@ impl<V: ReplicaValidator> Actor<V> {
     }
 
         /// Step 1. Build a valid cmd for validation of a debit.
-        pub fn build_login_packet_for_request(&self, amount: Money, new_owner: AccountId, new_login_packet: LoginPacket) -> Result<LoginPacketRequest> {
+        pub fn build_login_packet_for_request(&self, new_owner: AccountId,  amount: Money, new_login_packet: LoginPacket) -> Result<LoginPacketRequest> {
             if new_owner == self.id {
                 // Q: Should this be an error?
                 return Err(Error::from("Sender and recipient are the same"));
