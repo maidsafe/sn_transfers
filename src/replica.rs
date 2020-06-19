@@ -297,13 +297,6 @@ impl Replica {
         // consider event log, to properly be able to reconstruct state from restart
     }
 
-<<<<<<< HEAD
-    /// Test-helper API to test Client Transfers.
-    #[cfg(features = "simulated-payouts")]
-    pub fn apply_without_proof(&mut self, transfer: Transfer) {
-        let acc = transfer.to;
-        self.accounts.get_mut(&acc).unwrap().append(transfer);
-=======
     /// Test-helper API to simulate Client Transfers.
     #[cfg(feature = "simulated-payouts")]
     pub fn apply_without_proof(&mut self, transfer: Transfer) {
@@ -316,7 +309,6 @@ impl Replica {
                 let _ = self.accounts.insert(transfer.to, account);
             }
         };
->>>>>>> 984c901bb385... feat/simulated-payouts: add simulated-payouts feature and include testing API to Replica
     }
 
     /// -----------------------------------------------------------------
