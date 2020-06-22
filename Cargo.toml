@@ -14,11 +14,11 @@ version = "0.1.0"
 # # Ensure bincode version is identical to that in SAFE Client Libs and SAFE Network Data.
 bincode = "=1.1.4"
 safe-nd = { git = "https://github.com/maidsafe/safe-nd", branch = "at2" }
-serde = { version = "~1.0.97", features = ["derive"] }
+serde = { version = "1.0.97", features = ["derive"] }
 crdts = { git = "https://github.com/rust-crdt/rust-crdt", rev= "eab41f7" }
 threshold_crypto = "~0.3.2"
 rand = "~0.6.5"
-itertools = "0.9.0"
+itertools = "~0.9.0"
 
 [dev_dependencies]
 
