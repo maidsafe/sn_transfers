@@ -297,17 +297,26 @@ impl Replica {
         // consider event log, to properly be able to reconstruct state from restart
     }
 
-    /// Test-helper API to simulate Client Transfers.
+    /// Test-helper API to simulate Client CREDIT Transfers.
     #[cfg(feature = "simulated-payouts")]
-    pub fn apply_without_proof(&mut self, transfer: Transfer) {
+    pub fn credit_without_proof(&mut self, transfer: Transfer) {
         match self.accounts.get_mut(&transfer.to) {
-            Some(account) => account.simulated_append(transfer),
+            Some(account) => account.simulated_credit(transfer),
             None => {
                 // Creates if it doesn't exist.
                 let mut account = Account::new(transfer.id.actor);
-                account.simulated_append(transfer.clone());
+                account.simulated_credit(transfer.clone());
                 let _ = self.accounts.insert(transfer.to, account);
             }
+        };
+    }
+
+    /// Test-helper API to simulate Client DEBIT Transfers.
+    #[cfg(feature = "simulated-payouts")]
+    pub fn debit_without_proof(&mut self, transfer: Transfer) {
+        match self.accounts.get_mut(&transfer.to) {
+            Some(account) => account.simulated_debit(transfer),
+            None => panic!("Cannot debit from a non-existing account"),
         };
     }
 

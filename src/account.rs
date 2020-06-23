@@ -107,7 +107,7 @@ impl Account {
 
     /// Test-helper API to simulate Client Transfers.
     #[cfg(feature = "simulated-payouts")]
-    pub fn simulated_append(&mut self, transfer: Transfer) {
+    pub fn simulated_credit(&mut self, transfer: Transfer) {
         if self.id == transfer.id.actor {
             match self.balance.checked_add(transfer.amount) {
                 Some(amount) => self.balance = amount,
@@ -115,6 +115,21 @@ impl Account {
             }
             let _ = self.transfer_ids.insert(transfer.id);
             self.credits.push(transfer);
+        } else {
+            panic!("Transfer does not belong to this account")
+        }
+    }
+
+    /// Test-helper API to simulate section payments.
+    #[cfg(feature = "simulated-payouts")]
+    pub fn simulated_debit(&mut self, transfer: Transfer) {
+        if self.id == transfer.id.actor {
+            match self.balance.checked_sub(transfer.amount) {
+                Some(amount) => self.balance = amount,
+                None => panic!("overflow when subtracting!"),
+            }
+            let _ = self.transfer_ids.insert(transfer.id);
+            self.debits.push(transfer);
         } else {
             panic!("Transfer does not belong to this account")
         }
