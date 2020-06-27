@@ -8,7 +8,6 @@
 
 use safe_nd::{AccountId, Error, Money, Result, Transfer, TransferId};
 use std::collections::HashSet;
-
 /// The balance and history of transfers for an account id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Account {
@@ -55,7 +54,7 @@ impl Account {
     pub fn is_sequential(&self, transfer: &Transfer) -> Result<bool> {
         let id = transfer.id;
         if id.actor != self.id {
-            Err(Error::from("Operation is non-sequential"))
+            Err(Error::from("Account operation is non-sequential"))
         } else {
             match self.debits.last() {
                 None => Ok(id.counter == 0), // if no debits have been made, transfer counter must be 0
@@ -101,14 +100,17 @@ impl Account {
             let _ = self.transfer_ids.insert(transfer.id);
             self.credits.push(transfer);
         } else {
-            panic!("Transfer does not belong to this account")
+            panic!(
+                "Transfer to append does not belong to this account({:?}): transfer: {:?}",
+                self.id, transfer
+            )
         }
     }
 
     /// Test-helper API to simulate Client Transfers.
     #[cfg(feature = "simulated-payouts")]
     pub fn simulated_credit(&mut self, transfer: Transfer) {
-        if self.id == transfer.id.actor {
+        if self.id == transfer.to {
             match self.balance.checked_add(transfer.amount) {
                 Some(amount) => self.balance = amount,
                 None => panic!("overflow when adding!"),
@@ -116,7 +118,10 @@ impl Account {
             let _ = self.transfer_ids.insert(transfer.id);
             self.credits.push(transfer);
         } else {
-            panic!("Transfer does not belong to this account")
+            panic!(
+                "Credit transfer does not belong to this account({:?}): transfer: {:?}",
+                self.id, transfer
+            )
         }
     }
 
@@ -131,7 +136,10 @@ impl Account {
             let _ = self.transfer_ids.insert(transfer.id);
             self.debits.push(transfer);
         } else {
-            panic!("Transfer does not belong to this account")
+            panic!(
+                "Debit transfer does not belong to this account({:?}): transfer: {:?}",
+                self.id, transfer
+            )
         }
     }
 }

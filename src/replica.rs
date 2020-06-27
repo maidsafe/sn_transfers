@@ -7,6 +7,7 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::account::Account;
+use log::debug;
 use safe_nd::{
     AccountId, DebitAgreementProof, Error, KnownGroupAdded, Money, ReplicaEvent, Result,
     SignatureShare, SignedTransfer, Transfer, TransferPropagated, TransferRegistered,
@@ -167,6 +168,7 @@ impl Replica {
 
     /// Step 1. Main business logic validation of a debit.
     pub fn validate(&self, signed_transfer: SignedTransfer) -> Result<TransferValidated> {
+        debug!("Checking TransferValidated");
         let transfer = &signed_transfer.transfer;
         // Always verify signature first! (as to not leak any information).
         if !self.verify_actor_signature(&signed_transfer).is_ok() {
@@ -181,12 +183,12 @@ impl Replica {
         match self.pending_debits.get(&signed_transfer.from()) {
             None => {
                 if transfer.id.counter != 0 {
-                    return Err(Error::from("either already proposed or out of order msg"));
+                    return Err(Error::from("out of order msg, actor's counter should be 0"));
                 }
             }
             Some(value) => {
                 if transfer.id.counter != (value + 1) {
-                    return Err(Error::from("either already proposed or out of order msg"));
+                    return Err(Error::from(format!("out of order msg, previous count: {:?}", value)));
                 }
             }
         }
@@ -211,10 +213,13 @@ impl Replica {
 
     /// Step 2. Validation of agreement, and order at debit source.
     pub fn register(&self, debit_proof: &DebitAgreementProof) -> Result<TransferRegistered> {
+        debug!("Checking registered transfer");
+
         // Always verify signature first! (as to not leak any information).
         if !self.verify_registered_proof(debit_proof).is_ok() {
             return Err(Error::InvalidSignature);
         }
+
         let transfer = &debit_proof.signed_transfer.transfer;
         let sender = self.accounts.get(&debit_proof.from());
         match sender {
@@ -309,7 +314,7 @@ impl Replica {
             Some(account) => account.simulated_credit(transfer),
             None => {
                 // Creates if it doesn't exist.
-                let mut account = Account::new(transfer.id.actor);
+                let mut account = Account::new(transfer.to);
                 account.simulated_credit(transfer.clone());
                 let _ = self.accounts.insert(transfer.to, account);
             }
@@ -319,9 +324,12 @@ impl Replica {
     /// Test-helper API to simulate Client DEBIT Transfers.
     #[cfg(feature = "simulated-payouts")]
     pub fn debit_without_proof(&mut self, transfer: Transfer) {
-        match self.accounts.get_mut(&transfer.to) {
+        match self.accounts.get_mut(&transfer.id.actor) {
             Some(account) => account.simulated_debit(transfer),
-            None => panic!("Cannot debit from a non-existing account"),
+            None => panic!(
+                "Cannot debit from a non-existing account. this transfer caused the problem: {:?}",
+                transfer
+            ),
         };
     }
 
@@ -383,6 +391,7 @@ impl Replica {
                 if result.is_ok() {
                     return result;
                 }
+
                 // If it's not signed with our peers' public key, we won't consider it valid.
                 Err(Error::InvalidSignature)
             }
