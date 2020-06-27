@@ -101,14 +101,17 @@ impl Account {
             let _ = self.transfer_ids.insert(transfer.id);
             self.credits.push(transfer);
         } else {
-            panic!("Transfer does not belong to this account")
+            panic!(
+                "Transfer to append does not belong to this account({:?}): transfer: {:?}",
+                self.id, transfer
+            )
         }
     }
 
     /// Test-helper API to simulate Client Transfers.
     #[cfg(feature = "simulated-payouts")]
     pub fn simulated_credit(&mut self, transfer: Transfer) {
-        if self.id == transfer.id.actor {
+        if self.id == transfer.to {
             match self.balance.checked_add(transfer.amount) {
                 Some(amount) => self.balance = amount,
                 None => panic!("overflow when adding!"),
@@ -116,7 +119,10 @@ impl Account {
             let _ = self.transfer_ids.insert(transfer.id);
             self.credits.push(transfer);
         } else {
-            panic!("Transfer does not belong to this account")
+            panic!(
+                "Credit transfer does not belong to this account({:?}): transfer: {:?}",
+                self.id, transfer
+            )
         }
     }
 
@@ -131,7 +137,10 @@ impl Account {
             let _ = self.transfer_ids.insert(transfer.id);
             self.debits.push(transfer);
         } else {
-            panic!("Transfer does not belong to this account")
+            panic!(
+                "Debit transfer does not belong to this account({:?}): transfer: {:?}",
+                self.id, transfer
+            )
         }
     }
 }

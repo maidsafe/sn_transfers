@@ -309,7 +309,7 @@ impl Replica {
             Some(account) => account.simulated_credit(transfer),
             None => {
                 // Creates if it doesn't exist.
-                let mut account = Account::new(transfer.id.actor);
+                let mut account = Account::new(transfer.to);
                 account.simulated_credit(transfer.clone());
                 let _ = self.accounts.insert(transfer.to, account);
             }
@@ -319,9 +319,12 @@ impl Replica {
     /// Test-helper API to simulate Client DEBIT Transfers.
     #[cfg(feature = "simulated-payouts")]
     pub fn debit_without_proof(&mut self, transfer: Transfer) {
-        match self.accounts.get_mut(&transfer.to) {
+        match self.accounts.get_mut(&transfer.id.actor) {
             Some(account) => account.simulated_debit(transfer),
-            None => panic!("Cannot debit from a non-existing account"),
+            None => panic!(
+                "Cannot debit from a non-existing account. this transfer caused the problem: {:?}",
+                transfer
+            ),
         };
     }
 
