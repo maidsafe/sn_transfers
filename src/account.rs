@@ -30,6 +30,7 @@ impl Account {
         }
     }
 
+    /// Returns the ID(PublicKey) for the Account
     pub fn id(&self) -> AccountId {
         self.id
     }

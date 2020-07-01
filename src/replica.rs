@@ -188,7 +188,10 @@ impl Replica {
             }
             Some(value) => {
                 if transfer.id.counter != (value + 1) {
-                    return Err(Error::from(format!("out of order msg, previous count: {:?}", value)));
+                    return Err(Error::from(format!(
+                        "out of order msg, previous count: {:?}",
+                        value
+                    )));
                 }
             }
         }
@@ -254,14 +257,12 @@ impl Replica {
         if already_exists {
             Err(Error::TransferIdExists)
         } else {
-            match self.sign_proof(&debit_proof) {
-                Err(_) => Err(Error::InvalidSignature),
-                Ok(crediting_replica_sig) => Ok(TransferPropagated {
+            self.sign_proof(&debit_proof)
+                .map(|crediting_replica_sig| TransferPropagated {
                     debit_proof: debit_proof.clone(),
                     debiting_replicas,
                     crediting_replica_sig,
-                }),
-            }
+                })
         }
     }
 
@@ -324,7 +325,7 @@ impl Replica {
     /// Test-helper API to simulate Client DEBIT Transfers.
     #[cfg(feature = "simulated-payouts")]
     pub fn debit_without_proof(&mut self, transfer: Transfer) {
-        match self.accounts.get_mut(&transfer.id.actor) {
+        match self.accounts.get_mut(&transfer.to) {
             Some(account) => account.simulated_debit(transfer),
             None => panic!(
                 "Cannot debit from a non-existing account. this transfer caused the problem: {:?}",
@@ -405,6 +406,11 @@ impl Replica {
         match bincode::serialize(&proof.signed_transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
+                // Check if it is from our group.
+                let our_key = safe_nd::PublicKey::Bls(self.peer_replicas.public_key());
+                if our_key.verify(&proof.debiting_replicas_sig, &data).is_ok() {
+                    return Ok(our_key);
+                }
                 // Check all known groups of Replicas.
                 for set in &self.other_groups {
                     let debiting_replicas = safe_nd::PublicKey::Bls(set.public_key());
