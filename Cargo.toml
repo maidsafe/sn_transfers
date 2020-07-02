@@ -14,8 +14,6 @@ version = "0.1.0"
 # # Ensure bincode version is identical to that in SAFE Client Libs and SAFE Network Data.
 bincode = "1.2.1"
 safe-nd = { git = "https://github.com/maidsafe/safe-nd", branch = "at2" }
-# safe-nd = { git ="https://github.com/yoga07/safe-nd", branch="at2", features=["simulated-payouts"] }
-# safe-nd = { path="../safe-nd" }
 serde = { version = "1.0.97", features = ["derive"] }
 crdts = "4.1.0"
 threshold_crypto = "~0.3.2"
