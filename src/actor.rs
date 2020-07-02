@@ -210,6 +210,7 @@ impl<V: ReplicaValidator> Actor<V> {
                             proof = Some(DebitAgreementProof {
                                 signed_transfer: signed_transfer.clone(),
                                 debiting_replicas_sig: safe_nd::Signature::Bls(sig),
+                                replica_key: replicas,
                             });
                         } // else, we have some corrupt data. (todo: Do we need to act on that fact?)
                     };
@@ -281,13 +282,12 @@ impl<V: ReplicaValidator> Actor<V> {
                 debit_proof: e.debit_proof.clone(),
                 debiting_replicas: e.debiting_replicas,
             })
-            .filter(|credit| {
+            .filter(|_credit| {
                 #[cfg(feature = "simulated-payouts")]
-                {
-                    return true;
-                }
+                return true;
 
-                self.verify_credit_proof(credit).is_ok()
+                #[cfg(not(feature = "simulated-payouts"))]
+                self.verify_credit_proof(_credit).is_ok()
             })
             .filter(|credit| self.id == credit.to())
             .filter(|credit| !self.account.contains(&credit.id()))
@@ -456,6 +456,7 @@ impl<V: ReplicaValidator> Actor<V> {
     }
 
     /// Verify that this is a valid ReceivedCredit.
+    #[cfg(not(feature = "simulated-payouts"))]
     fn verify_credit_proof(&self, credit: &ReceivedCredit) -> Result<()> {
         if !self.replica_validator.is_valid(credit.debiting_replicas) {
             return Err(Error::InvalidSignature);
@@ -671,6 +672,7 @@ mod test {
         let debit_agreement_proof = DebitAgreementProof {
             signed_transfer: transfer.signed_transfer,
             debiting_replicas_sig,
+            replica_key: pk_set,
         };
 
         TransferRegistrationSent {

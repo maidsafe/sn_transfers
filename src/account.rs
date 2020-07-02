@@ -144,6 +144,7 @@ impl Account {
     }
 }
 
+#[cfg(test)]
 mod test {
     use super::*;
     use crdts::Dot;

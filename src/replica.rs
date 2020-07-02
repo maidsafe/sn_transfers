@@ -9,7 +9,7 @@
 use super::account::Account;
 use log::debug;
 use safe_nd::{
-    AccountId, DebitAgreementProof, Error, KnownGroupAdded, Money, ReplicaEvent, Result,
+    AccountId, DebitAgreementProof, Error, KnownGroupAdded, Money, PublicKey, ReplicaEvent, Result,
     SignatureShare, SignedTransfer, Transfer, TransferPropagated, TransferRegistered,
     TransferValidated,
 };
@@ -212,11 +212,15 @@ impl Replica {
     }
 
     /// Step 2. Validation of agreement, and order at debit source.
-    pub fn register(&self, debit_proof: &DebitAgreementProof) -> Result<TransferRegistered> {
+    pub fn register<F: FnOnce() -> bool>(
+        &self,
+        debit_proof: &DebitAgreementProof,
+        f: F,
+    ) -> Result<TransferRegistered> {
         debug!("Checking registered transfer");
 
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_registered_proof(debit_proof).is_ok() {
+        if !self.verify_registered_proof(debit_proof, f).is_ok() {
             return Err(Error::InvalidSignature);
         }
 
@@ -241,12 +245,13 @@ impl Replica {
 
     /// Step 3. Validation of DebitAgreementProof, and credit idempotency at credit destination.
     /// (Since this leads to a credit, there is no requirement on order.)
-    pub fn receive_propagated(
+    pub fn receive_propagated<F: FnOnce() -> Option<PublicKey>>(
         &self,
         debit_proof: &DebitAgreementProof,
+        f: F,
     ) -> Result<TransferPropagated> {
         // Always verify signature first! (as to not leak any information).
-        let debiting_replicas = self.verify_propagated_proof(debit_proof)?;
+        let debiting_replicas = self.verify_propagated_proof(debit_proof, f)?;
         let already_exists = match self.accounts.get(&debit_proof.to()) {
             None => false,
             Some(history) => history.contains(&debit_proof.id()),
@@ -297,7 +302,7 @@ impl Replica {
                     Some(account) => account.append(transfer),
                     None => {
                         // Creates if not exists.
-                        let mut account = Account::new(transfer.id.actor);
+                        let mut account = Account::new(transfer.to);
                         account.append(transfer.clone());
                         let _ = self.accounts.insert(transfer.to, account);
                     }
@@ -380,7 +385,11 @@ impl Replica {
 
     /// Verify that this is a valid _registered_
     /// DebitAgreementProof, i.e. signed by our peers.
-    fn verify_registered_proof(&self, proof: &DebitAgreementProof) -> Result<()> {
+    fn verify_registered_proof<F: FnOnce() -> bool>(
+        &self,
+        proof: &DebitAgreementProof,
+        f: F,
+    ) -> Result<()> {
         // Check that the proof corresponds to a public key set of our peers.
         match bincode::serialize(&proof.signed_transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
@@ -389,6 +398,10 @@ impl Replica {
                 let public_key = safe_nd::PublicKey::Bls(self.peer_replicas.public_key());
                 let result = public_key.verify(&proof.debiting_replicas_sig, &data);
                 if result.is_ok() {
+                    return result;
+                }
+                // Check if proof is signed with an older key
+                if f() {
                     return result;
                 }
 
@@ -400,11 +413,27 @@ impl Replica {
 
     /// Verify that this is a valid _propagated_
     /// DebitAgreementProof, i.e. signed by a group that we know of.
-    fn verify_propagated_proof(&self, proof: &DebitAgreementProof) -> Result<safe_nd::PublicKey> {
+    fn verify_propagated_proof<F: FnOnce() -> Option<PublicKey>>(
+        &self,
+        proof: &DebitAgreementProof,
+        f: F,
+    ) -> Result<PublicKey> {
         // Check that the proof corresponds to a public key set of some Replicas.
         match bincode::serialize(&proof.signed_transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
+                // Check if it is from our group.
+                let our_key = safe_nd::PublicKey::Bls(self.peer_replicas.public_key());
+                if our_key.verify(&proof.debiting_replicas_sig, &data).is_ok() {
+                    return Ok(our_key);
+                }
+
+                // Check if it was previously a part of our group
+                if let Some(out_past_key) = f() {
+                    return Ok(out_past_key);
+                }
+
+                // TODO: Check retrospectively(using SectionProofChain) for known groups also
                 // Check all known groups of Replicas.
                 for set in &self.other_groups {
                     let debiting_replicas = safe_nd::PublicKey::Bls(set.public_key());

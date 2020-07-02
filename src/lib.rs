@@ -299,7 +299,7 @@ mod test {
         replica_group: &mut ReplicaGroup,
     ) {
         for replica in &mut replica_group.replicas {
-            let registered = replica.register(debit_proof).unwrap();
+            let registered = replica.register(debit_proof, || true).unwrap();
             replica.apply(ReplicaEvent::TransferRegistered(registered));
         }
     }
@@ -313,7 +313,7 @@ mod test {
             .replicas
             .iter_mut()
             .map(|replica| {
-                let propagated = replica.receive_propagated(debit_proof).unwrap();
+                let propagated = replica.receive_propagated(debit_proof, || None).unwrap();
                 replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()));
                 ReplicaEvent::TransferPropagated(propagated.clone())
             })
