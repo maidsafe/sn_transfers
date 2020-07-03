@@ -338,7 +338,7 @@ impl<V: ReplicaValidator> Actor<V> {
         debug!("Applying event {:?}", event);
         match event {
             ActorEvent::TransferInitiated(e) => {
-                self.next_debit_version = e.id().counter;
+                self.next_debit_version = e.id().counter + 1;
             }
             ActorEvent::TransferValidationReceived(e) => {
                 if let Some(_) = e.proof {
@@ -365,7 +365,6 @@ impl<V: ReplicaValidator> Actor<V> {
             ActorEvent::TransferRegistrationSent(e) => {
                 self.account.append(e.debit_proof.signed_transfer.transfer);
                 self.accumulating_validations.clear();
-                self.next_debit_version = self.next_debit_version + 1;
             }
             ActorEvent::TransfersSynched(e) => {
                 for credit in e.credits {

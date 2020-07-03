@@ -188,7 +188,10 @@ impl Replica {
             }
             Some(value) => {
                 if transfer.id.counter != (value + 1) {
-                    return Err(Error::from(format!("out of order msg, previous count: {:?}", value)));
+                    return Err(Error::from(format!(
+                        "out of order msg, previous count: {:?}",
+                        value
+                    )));
                 }
             }
         }
@@ -429,8 +432,8 @@ impl Replica {
                 }
 
                 // Check if it was previously a part of our group
-                if let Some(out_past_key) = f() {
-                    return Ok(out_past_key);
+                if let Some(our_past_key) = f() {
+                    return Ok(our_past_key);
                 }
 
                 // TODO: Check retrospectively(using SectionProofChain) for known groups also
