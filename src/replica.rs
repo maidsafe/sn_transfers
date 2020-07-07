@@ -128,16 +128,19 @@ impl Replica {
     /// ---------------------- Cmds -------------------------------------
     /// -----------------------------------------------------------------
 
-    // /// This is the one and only infusion of money to the system. Ever.
-    // /// It is carried out by the first node in the network.
-    // /// WIP
-    // pub fn genesis(&self, proof: DebitAgreementProof) -> Result<TransferPropagated> {
-    //     // genesis must be the first
-    //     if self.accounts.len() > 0 {
-    //         return Err(Error::InvalidOperation);
-    //     }
-    //     Ok(TransferPropagated { debit_proof, replica_sig })
-    // }
+    /// This is the one and only infusion of money to the system. Ever.
+    /// It is carried out by the first node in the network.
+    pub fn genesis<F: FnOnce() -> Option<PublicKey>>(
+        &self,
+        debit_proof: &DebitAgreementProof,
+        f: F,
+    ) -> Result<TransferPropagated> {
+        // Genesis must be the first account.
+        if self.accounts.len() > 0 {
+            return Err(Error::InvalidOperation);
+        }
+        self.receive_propagated(debit_proof, f)
+    }
 
     /// Adds a PK set for a a new group that we learn of.
     pub fn add_known_group(&self, group: PublicKeySet) -> Result<KnownGroupAdded> {

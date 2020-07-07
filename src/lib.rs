@@ -163,9 +163,10 @@ mod test {
     };
     use rand::Rng;
     use safe_nd::{
-        AccountId, ClientFullId, DebitAgreementProof, Money, PublicKey, SafeKey, Transfer,
+        AccountId, ClientFullId, DebitAgreementProof, Money, PublicKey, SafeKey, SignedTransfer,
+        Transfer,
     };
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use threshold_crypto::{PublicKeySet, SecretKey, SecretKeySet, SecretKeyShare};
 
     macro_rules! hashmap {
@@ -193,6 +194,37 @@ mod test {
     #[test]
     fn quickcheck_basic_transfer() {
         quickcheck(transfer_between_actors as fn(u64, u64, u8, u8, u8, u8) -> TestResult);
+    }
+
+    // ------------------------------------------------------------------------
+    // ------------------------ Genesis --------------------------------
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn can_start_with_genesis() {
+        let debit_proof = get_genesis();
+        let keys = setup_replica_group_keys(1, 3);
+        let mut groups = setup_replica_groups(keys, vec![]);
+        let previous_key = Some(PublicKey::Bls(debit_proof.replica_keys().public_key()));
+        for replica in &mut groups.remove(0).replicas {
+            let result = replica.genesis(&debit_proof, || previous_key).unwrap();
+            replica.apply(ReplicaEvent::TransferPropagated(result));
+            let balance = replica.balance(&debit_proof.to()).unwrap();
+            println!("Balance: {}", balance);
+            assert_eq!(debit_proof.amount(), balance);
+        }
+    }
+
+    #[test]
+    fn genesis_can_only_be_the_first() {
+        let debit_proof = get_genesis();
+        let mut account_configs = hashmap![0 => 10];
+        let mut groups = get_network(1, 3, account_configs).0;
+        let previous_key = Some(PublicKey::Bls(debit_proof.replica_keys().public_key()));
+        for replica in &mut groups.remove(0).replicas {
+            let result = replica.genesis(&debit_proof, || previous_key);
+            assert_eq!(result.is_err(), true);
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -331,6 +363,62 @@ mod test {
     // ------------------------------------------------------------------------
     // ------------------------ Setup Helpers ---------------------------------
     // ------------------------------------------------------------------------
+
+    fn get_genesis() -> DebitAgreementProof {
+        let mut rng = rand::thread_rng();
+        let index = 0;
+        let threshold = 0;
+        let bls_secret_key = SecretKeySet::random(threshold, &mut rng);
+        let peer_replicas = bls_secret_key.public_keys();
+        let secret_key = bls_secret_key.secret_key_share(index);
+        let mut account = Account::new(PublicKey::Bls(peer_replicas.public_key()));
+        let replica = Replica::from_snapshot(
+            secret_key.clone(),
+            index,
+            peer_replicas.clone(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
+        let transfer = Transfer {
+            amount: Money::from_nano(u32::MAX as u64 * 1000000000),
+            id: Dot::new(get_random_pk(), 0),
+            to: account.id(),
+        };
+
+        let serialised_transfer = bincode::serialize(&transfer).unwrap();
+        let transfer_sig_share = secret_key.sign(serialised_transfer);
+        let mut transfer_sig_shares = BTreeMap::new();
+        let _ = transfer_sig_shares.insert(0, transfer_sig_share);
+        // Combine shares to produce the main signature.
+        let actor_signature = safe_nd::Signature::Bls(
+            peer_replicas
+                .combine_signatures(&transfer_sig_shares)
+                .expect("not enough shares"),
+        );
+
+        let signed_transfer = SignedTransfer {
+            transfer,
+            actor_signature,
+        };
+
+        let serialised_transfer = bincode::serialize(&signed_transfer).unwrap();
+        let transfer_sig_share = secret_key.sign(serialised_transfer);
+        let mut transfer_sig_shares = BTreeMap::new();
+        let _ = transfer_sig_shares.insert(0, transfer_sig_share);
+        // Combine shares to produce the main signature.
+        let debiting_replicas_sig = safe_nd::Signature::Bls(
+            peer_replicas
+                .combine_signatures(&transfer_sig_shares)
+                .expect("not enough shares"),
+        );
+
+        DebitAgreementProof {
+            signed_transfer,
+            debiting_replicas_sig,
+            replica_key: peer_replicas,
+        }
+    }
 
     fn get_network(
         group_count: u8,
