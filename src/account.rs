@@ -30,6 +30,7 @@ impl Account {
         }
     }
 
+    /// Get the id of the account.
     pub fn id(&self) -> AccountId {
         self.id
     }
@@ -84,26 +85,28 @@ impl Account {
     }
 
     /// Mutates state.
-    pub fn append(&mut self, transfer: Transfer) {
+    pub fn append(&mut self, transfer: Transfer) -> Result<()> {
         if self.id == transfer.id.actor {
             match self.balance.checked_sub(transfer.amount) {
                 Some(amount) => self.balance = amount,
-                None => panic!("overflow when subtracting!"),
+                None => return Err(Error::from("overflow when subtracting!")),
             }
             let _ = self.transfer_ids.insert(transfer.id);
             self.debits.push(transfer);
+            Ok(())
         } else if self.id == transfer.to {
             match self.balance.checked_add(transfer.amount) {
                 Some(amount) => self.balance = amount,
-                None => panic!("overflow when adding!"),
+                None => return Err(Error::from("overflow when adding!")),
             }
             let _ = self.transfer_ids.insert(transfer.id);
             self.credits.push(transfer);
+            Ok(())
         } else {
-            panic!(
-                "Transfer to append does not belong to this account({:?}): transfer: {:?}",
+            Err(Error::from(format!(
+                "Transfer does not belong to this account({:?}): transfer: {:?}",
                 self.id, transfer
-            )
+            )))
         }
     }
 
@@ -152,7 +155,7 @@ mod test {
     use threshold_crypto::SecretKey;
 
     #[test]
-    fn appends_credits() {
+    fn appends_credits() -> Result<()> {
         // Arrange
         let balance = Money::from_nano(10);
         let first_credit = Transfer {
@@ -161,7 +164,7 @@ mod test {
             amount: balance,
         };
         let mut account = Account::new(first_credit.to);
-        account.append(first_credit.clone());
+        account.append(first_credit.clone())?;
         let second_credit = Transfer {
             id: Dot::new(get_random_pk(), 0),
             to: first_credit.to,
@@ -169,7 +172,7 @@ mod test {
         };
 
         // Act
-        account.append(second_credit.clone());
+        account.append(second_credit.clone())?;
         let credits = account.credits_since(0);
         let debits = account.debits_since(0);
         let is_sequential = account.is_sequential(&Transfer {
@@ -183,13 +186,14 @@ mod test {
         assert!(account.balance() == balance.checked_add(balance).unwrap());
         assert!(credits.len() == 2);
         assert!(credits[1] == second_credit);
-        assert!(debits.len() == 0);
+        assert!(debits.is_empty());
         assert!(account.next_debit() == 0);
-        assert!(is_sequential.is_ok() && is_sequential.unwrap());
+        assert!(is_sequential.is_ok() && is_sequential?);
+        Ok(())
     }
 
     #[test]
-    fn appends_debits() {
+    fn appends_debits() -> Result<()> {
         // Arrange
         let balance = Money::from_nano(10);
         let first_credit = Transfer {
@@ -198,7 +202,7 @@ mod test {
             amount: balance,
         };
         let mut account = Account::new(first_credit.to);
-        account.append(first_credit.clone());
+        account.append(first_credit.clone())?;
         let first_debit = Transfer {
             id: Dot::new(first_credit.to, 0),
             to: get_random_pk(),
@@ -206,7 +210,7 @@ mod test {
         };
 
         // Act
-        account.append(first_debit.clone());
+        account.append(first_debit.clone())?;
         let credits = account.credits_since(0);
         let debits = account.debits_since(0);
         let is_sequential = account.is_sequential(&Transfer {
@@ -223,9 +227,11 @@ mod test {
         assert!(credits.len() == 1);
         assert!(credits[0] == first_credit);
         assert!(account.next_debit() == 1);
-        assert!(is_sequential.is_ok() && is_sequential.unwrap());
+        assert!(is_sequential.is_ok() && is_sequential?);
+        Ok(())
     }
 
+    #[allow(unused)]
     fn get_random_xor() -> XorName {
         XorName::from(get_random_pk())
     }

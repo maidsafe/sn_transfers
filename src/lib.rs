@@ -34,10 +34,30 @@ pub use self::{
 };
 
 use safe_nd::{
-    DebitAgreementProof, Money, PublicKey, ReplicaEvent, SignedTransfer, TransferId,
+    DebitAgreementProof, Error, Money, PublicKey, ReplicaEvent, Result, SignedTransfer, TransferId,
     TransferValidated,
 };
 use serde::{Deserialize, Serialize};
+
+type Outcome<T> = Result<Option<T>>;
+
+trait TernaryResult<T> {
+    fn success(item: T) -> Self;
+    fn no_change() -> Self;
+    fn rejected(error: Error) -> Self;
+}
+
+impl<T> TernaryResult<T> for Outcome<T> {
+    fn success(item: T) -> Self {
+        Ok(Some(item))
+    }
+    fn no_change() -> Self {
+        Ok(None)
+    }
+    fn rejected(error: Error) -> Self {
+        Err(error)
+    }
+}
 
 /// A received credit, contains the DebitAgreementProof from the sender Replicas,
 /// as well as the public key of those Replicas, for us to verify that they are valid Replicas.
@@ -85,6 +105,7 @@ pub trait ReplicaValidator {
 }
 
 /// Events raised by the Actor.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
 pub enum ActorEvent {
     /// Raised when a request to create
@@ -163,8 +184,8 @@ mod test {
     };
     use rand::Rng;
     use safe_nd::{
-        AccountId, ClientFullId, DebitAgreementProof, Money, PublicKey, SafeKey, SignedTransfer,
-        Transfer,
+        AccountId, ClientFullId, DebitAgreementProof, Money, PublicKey, Result, SafeKey,
+        SignedTransfer, Transfer,
     };
     use std::collections::{BTreeMap, HashMap, HashSet};
     use threshold_crypto::{PublicKeySet, SecretKey, SecretKeySet, SecretKeyShare};
@@ -191,6 +212,7 @@ mod test {
     //     let _ = transfer_between_actors(1, 0, 2, 4, 0, 1);
     // }
 
+    #[allow(trivial_casts)]
     #[test]
     fn quickcheck_basic_transfer() {
         quickcheck(transfer_between_actors as fn(u64, u64, u8, u8, u8, u8) -> TestResult);
@@ -201,22 +223,23 @@ mod test {
     // ------------------------------------------------------------------------
 
     #[test]
-    fn can_start_with_genesis() {
+    fn can_start_with_genesis() -> Result<()> {
         let debit_proof = get_genesis();
         let keys = setup_replica_group_keys(1, 3);
         let mut groups = setup_replica_groups(keys, vec![]);
         let previous_key = Some(PublicKey::Bls(debit_proof.replica_keys().public_key()));
         for replica in &mut groups.remove(0).replicas {
-            let result = replica.genesis(&debit_proof, || previous_key).unwrap();
-            replica.apply(ReplicaEvent::TransferPropagated(result));
+            let result = replica.genesis(&debit_proof, || previous_key)?.unwrap();
+            replica.apply(ReplicaEvent::TransferPropagated(result))?;
             let balance = replica.balance(&debit_proof.to()).unwrap();
             println!("Balance: {}", balance);
             assert_eq!(debit_proof.amount(), balance);
         }
+        Ok(())
     }
 
     #[test]
-    fn genesis_can_only_be_the_first() {
+    fn genesis_can_only_be_the_first() -> Result<()> {
         let debit_proof = get_genesis();
         let mut account_configs = hashmap![0 => 10];
         let mut groups = get_network(1, 3, account_configs).0;
@@ -225,6 +248,7 @@ mod test {
             let result = replica.genesis(&debit_proof, || previous_key);
             assert_eq!(result.is_err(), true);
         }
+        Ok(())
     }
 
     // ------------------------------------------------------------------------
@@ -239,15 +263,37 @@ mod test {
         sender_index: u8,
         recipient_index: u8,
     ) -> TestResult {
+        match basic_transfer_between_actors(
+            sender_balance,
+            recipient_balance,
+            group_count,
+            replica_count,
+            sender_index,
+            recipient_index,
+        ) {
+            Ok(Some(_)) => TestResult::passed(),
+            Ok(None) => TestResult::discard(),
+            Err(_) => TestResult::failed(),
+        }
+    }
+
+    fn basic_transfer_between_actors(
+        sender_balance: u64,
+        recipient_balance: u64,
+        group_count: u8,
+        replica_count: u8,
+        sender_index: u8,
+        recipient_index: u8,
+    ) -> Result<Option<()>> {
         // --- Filter ---
-        if 0 >= sender_balance
-            || 0 >= group_count
+        if 0 == sender_balance
+            || 0 == group_count
             || 2 >= replica_count
             || sender_index >= group_count
             || recipient_index >= group_count
             || sender_index == recipient_index
         {
-            return TestResult::discard();
+            return Ok(None);
         }
 
         // --- Arrange ---
@@ -260,21 +306,21 @@ mod test {
 
         // --- Act ---
         // 1. Init transfer at Sender Actor.
-        let transfer = init_transfer(&mut sender, recipient.actor.id());
+        let transfer = init_transfer(&mut sender, recipient.actor.id())?;
         // 2. Validate at Sender Replicas.
-        let debit_proof = validate_at_sender_replicas(transfer, &mut sender).unwrap();
+        let debit_proof = validate_at_sender_replicas(transfer, &mut sender)?.unwrap();
         // 3. Register at Sender Replicas.
-        register_at_debiting_replicas(&debit_proof, &mut sender.replica_group);
+        register_at_debiting_replicas(&debit_proof, &mut sender.replica_group)?;
         // 4. Propagate to Recipient Replicas.
         let events = propagate_to_crediting_replicas(&debit_proof, &mut recipient.replica_group);
         // 5. Synch at Recipient Actor.
-        synch(&mut recipient, events);
+        synch(&mut recipient, events)?;
 
         // --- Assert ---
         // Actor and Replicas have the correct balance.
         assert_balance(sender, Money::zero());
         assert_balance(recipient, Money::from_nano(recipient_final));
-        TestResult::passed()
+        Ok(Some(()))
     }
 
     fn assert_balance(actor: TestActor, amount: Money) {
@@ -292,48 +338,49 @@ mod test {
     // ------------------------------------------------------------------------
 
     // 1. Init debit at Sender Actor.
-    fn init_transfer(sender: &mut TestActor, to: AccountId) -> TransferInitiated {
-        let transfer = sender.actor.transfer(sender.actor.balance(), to).unwrap();
+    fn init_transfer(sender: &mut TestActor, to: AccountId) -> Result<TransferInitiated> {
+        let transfer = sender.actor.transfer(sender.actor.balance(), to)?.unwrap();
 
         sender
             .actor
             .apply(ActorEvent::TransferInitiated(transfer.clone()));
 
-        transfer
+        Ok(transfer)
     }
 
     // 2. Validate debit at Sender Replicas.
     fn validate_at_sender_replicas(
         transfer: TransferInitiated,
         sender: &mut TestActor,
-    ) -> Option<DebitAgreementProof> {
+    ) -> Result<Option<DebitAgreementProof>> {
         for replica in &mut sender.replica_group.replicas {
-            let validated = replica.validate(transfer.signed_transfer.clone()).unwrap();
-            replica.apply(ReplicaEvent::TransferValidated(validated.clone()));
-            let validation_received = sender.actor.receive(validated).unwrap();
+            let validated = replica.validate(transfer.signed_transfer.clone())?.unwrap();
+            replica.apply(ReplicaEvent::TransferValidated(validated.clone()))?;
+            let validation_received = sender.actor.receive(validated)?.unwrap();
             sender.actor.apply(ActorEvent::TransferValidationReceived(
                 validation_received.clone(),
-            ));
+            ))?;
             if let Some(proof) = validation_received.proof {
-                let registered = sender.actor.register(proof.clone()).unwrap();
+                let registered = sender.actor.register(proof.clone())?.unwrap();
                 sender
                     .actor
-                    .apply(ActorEvent::TransferRegistrationSent(registered));
-                return Some(proof);
+                    .apply(ActorEvent::TransferRegistrationSent(registered))?;
+                return Ok(Some(proof));
             }
         }
-        return None;
+        Ok(None)
     }
 
     // 3. Register debit at Sender Replicas.
     fn register_at_debiting_replicas(
         debit_proof: &DebitAgreementProof,
         replica_group: &mut ReplicaGroup,
-    ) {
+    ) -> Result<()> {
         for replica in &mut replica_group.replicas {
-            let registered = replica.register(debit_proof, || true).unwrap();
-            replica.apply(ReplicaEvent::TransferRegistered(registered));
+            let registered = replica.register(debit_proof, || true)?.unwrap();
+            replica.apply(ReplicaEvent::TransferRegistered(registered))?;
         }
+        Ok(())
     }
 
     // 4. Propagate credit to Recipient Replicas.
@@ -345,19 +392,23 @@ mod test {
             .replicas
             .iter_mut()
             .map(|replica| {
-                let propagated = replica.receive_propagated(debit_proof, || None).unwrap();
-                replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()));
-                ReplicaEvent::TransferPropagated(propagated.clone())
+                let propagated = replica.receive_propagated(debit_proof, || None)?.unwrap();
+                replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()))?;
+                Ok(ReplicaEvent::TransferPropagated(propagated))
+            })
+            .filter_map(|c: Result<ReplicaEvent>| match c {
+                Ok(c) => Some(c),
+                _ => None,
             })
             .collect()
     }
 
     // 5. Synch at Recipient Actor.
-    fn synch(recipient: &mut TestActor, events: Vec<ReplicaEvent>) {
-        let transfers = recipient.actor.synch(events).unwrap();
+    fn synch(recipient: &mut TestActor, events: Vec<ReplicaEvent>) -> Result<()> {
+        let transfers = recipient.actor.synch(events)?.unwrap();
         recipient
             .actor
-            .apply(ActorEvent::TransfersSynched(transfers));
+            .apply(ActorEvent::TransfersSynched(transfers))
     }
 
     // ------------------------------------------------------------------------
@@ -381,7 +432,7 @@ mod test {
             Default::default(),
         );
         let transfer = Transfer {
-            amount: Money::from_nano(u32::MAX as u64 * 1000000000),
+            amount: Money::from_nano(u32::MAX as u64 * 1_000_000_000),
             id: Dot::new(get_random_pk(), 0),
             to: account.id(),
         };
@@ -545,7 +596,7 @@ mod test {
                 .clone()
                 .into_iter()
                 .filter(|c| c.replica_group == *i)
-                .map(|c| (c.account.id(), c.account.clone()))
+                .map(|c| (c.account.id(), c.account))
                 .collect::<HashMap<AccountId, Account>>();
 
             let mut replicas = vec![];
@@ -565,7 +616,7 @@ mod test {
                 );
                 replicas.push(replica);
             }
-            let _ = replica_groups.push(ReplicaGroup {
+            replica_groups.push(ReplicaGroup {
                 index: *i,
                 id: group.id,
                 replicas,
