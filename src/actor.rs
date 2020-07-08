@@ -125,20 +125,20 @@ impl<V: ReplicaValidator> Actor<V> {
     /// Step 1. Build a valid cmd for validation of a debit.
     pub fn transfer(&self, amount: Money, to: AccountId) -> Outcome<TransferInitiated> {
         if to == self.id {
-            return Outcome::rejected(Error::from("Sender and recipient are the same"));
+            return Err(Error::from("Sender and recipient are the same"));
         }
 
         let id = Dot::new(self.id, self.account.next_debit());
 
         // ensures one debit is completed at a time
         if self.next_expected_debit != self.account.next_debit() {
-            return Outcome::rejected(Error::from("Current pending debit has not been completed"));
+            return Err(Error::from("Current pending debit has not been completed"));
         }
         if self.next_expected_debit != id.counter {
-            return Outcome::rejected(Error::from("Debit already proposed or out of order"));
+            return Err(Error::from("Debit already proposed or out of order"));
         }
         if amount > self.balance() {
-            return Outcome::rejected(Error::InsufficientBalance);
+            return Err(Error::InsufficientBalance);
         }
         let transfer = Transfer { id, to, amount };
         match self.sign(&transfer) {
@@ -149,7 +149,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 };
                 Outcome::success(TransferInitiated { signed_transfer })
             }
-            Err(e) => Outcome::rejected(e),
+            Err(e) => Err(e),
         }
     }
 
@@ -632,7 +632,7 @@ mod test {
         sk_set: &SecretKeySet,
     ) -> Result<Vec<TransferValidated>> {
         let signed_transfer = transfer.signed_transfer;
-        let serialized_signed_transfer = try_serialize(&signed_transfer.clone())?;
+        let serialized_signed_transfer = try_serialize(&signed_transfer)?;
         let sk_shares: Vec<_> = (0..7).map(|i| sk_set.secret_key_share(i)).collect();
         let pk_set = sk_set.public_keys();
 
