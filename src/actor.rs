@@ -164,7 +164,7 @@ impl<V: ReplicaValidator> Actor<V> {
             return Err(Error::from("Validation not intended for this actor")); // "validation is not intended for this actor"
         }
         // check if expected this validation
-        if self.next_debit_version != signed_transfer.transfer.id.counter {
+        if self.next_debit_version -1 != signed_transfer.transfer.id.counter {
             return Err(Error::from("Out of order validation"));
         }
         // check if already received
