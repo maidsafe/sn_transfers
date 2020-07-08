@@ -7,8 +7,9 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::{
-    account::Account, ActorEvent, ReceivedCredit, ReplicaValidator, TransferInitiated,
-    TransferRegistrationSent, TransferValidated, TransferValidationReceived, TransfersSynched,
+    account::Account, ActorEvent, Outcome, ReceivedCredit, ReplicaValidator, TernaryResult,
+    TransferInitiated, TransferRegistrationSent, TransferValidated, TransferValidationReceived,
+    TransfersSynched,
 };
 use crdts::Dot;
 use itertools::Itertools;
@@ -41,7 +42,7 @@ pub struct Actor<V: ReplicaValidator> {
     account: Account,
     /// Ensures that the actor's transfer
     /// initiations (ValidateTransfer cmd) are sequential.
-    next_debit_version: u64,
+    next_expected_debit: u64,
     /// When a transfer is initiated, validations are accumulated here.
     /// After quorum is reached and proof produced, the set is cleared.
     accumulating_validations: BTreeMap<PublicKeySet, HashSet<TransferValidated>>,
@@ -69,7 +70,7 @@ impl<V: ReplicaValidator> Actor<V> {
             replicas,
             replica_validator,
             account: Account::new(id),
-            next_debit_version: 0,
+            next_expected_debit: 0,
             accumulating_validations: Default::default(),
         }
     }
@@ -88,7 +89,7 @@ impl<V: ReplicaValidator> Actor<V> {
             replicas,
             replica_validator,
             account,
-            next_debit_version: 0,
+            next_expected_debit: 0,
             accumulating_validations: Default::default(),
         }
     }
@@ -122,22 +123,22 @@ impl<V: ReplicaValidator> Actor<V> {
     /// -----------------------------------------------------------------
 
     /// Step 1. Build a valid cmd for validation of a debit.
-    pub fn transfer(&self, amount: Money, to: AccountId) -> Result<TransferInitiated> {
+    pub fn transfer(&self, amount: Money, to: AccountId) -> Outcome<TransferInitiated> {
         if to == self.id {
-            return Err(Error::from("Sender and recipient are the same"));
+            return Outcome::rejected(Error::from("Sender and recipient are the same"));
         }
 
         let id = Dot::new(self.id, self.account.next_debit());
 
         // ensures one debit is completed at a time
-        if self.next_debit_version != self.account.next_debit() {
-            return Err(Error::from("Current pending debit has not been completed"));
+        if self.next_expected_debit != self.account.next_debit() {
+            return Outcome::rejected(Error::from("Current pending debit has not been completed"));
         }
-        if self.next_debit_version != id.counter {
-            return Err(Error::from("Debit already proposed or out of order"));
+        if self.next_expected_debit != id.counter {
+            return Outcome::rejected(Error::from("Debit already proposed or out of order"));
         }
         if amount > self.balance() {
-            return Err(Error::InsufficientBalance);
+            return Outcome::rejected(Error::InsufficientBalance);
         }
         let transfer = Transfer { id, to, amount };
         match self.sign(&transfer) {
@@ -146,29 +147,29 @@ impl<V: ReplicaValidator> Actor<V> {
                     transfer,
                     actor_signature,
                 };
-                Ok(TransferInitiated { signed_transfer })
+                Outcome::success(TransferInitiated { signed_transfer })
             }
-            Err(e) => Err(e),
+            Err(e) => Outcome::rejected(e),
         }
     }
 
     /// Step 2. Receive validations from Replicas, aggregate the signatures.
-    pub fn receive(&self, validation: TransferValidated) -> Result<TransferValidationReceived> {
+    pub fn receive(&self, validation: TransferValidated) -> Outcome<TransferValidationReceived> {
         // Always verify signature first! (as to not leak any information).
-        if !self.verify(&validation).is_ok() {
+        if self.verify(&validation).is_err() {
             return Err(Error::InvalidSignature);
         }
         let signed_transfer = &validation.signed_transfer;
         // check if validation was initiated by this actor
-        if self.id != signed_transfer.transfer.id.actor {
+        if self.id != signed_transfer.from() {
             return Err(Error::from("Validation not intended for this actor")); // "validation is not intended for this actor"
         }
         // check if expected this validation
-        if self.next_debit_version -1 != signed_transfer.transfer.id.counter {
+        if self.next_expected_debit != signed_transfer.id().counter + 1 {
             return Err(Error::from("Out of order validation"));
         }
         // check if already received
-        for (_, validations) in &self.accumulating_validations {
+        for validations in self.accumulating_validations.values() {
             if validations.contains(&validation) {
                 return Err(Error::from("Already received validation"));
             }
@@ -218,15 +219,15 @@ impl<V: ReplicaValidator> Actor<V> {
             }
         }
 
-        Ok(TransferValidationReceived { validation, proof })
+        Outcome::success(TransferValidationReceived { validation, proof })
     }
 
     /// Step 3. Registration of an agreed transfer.
     /// (The actual sending of the registration over the wire is done by upper layer,
     /// only after that, the event is applied to the actor instance.)
-    pub fn register(&self, debit_proof: DebitAgreementProof) -> Result<TransferRegistrationSent> {
+    pub fn register(&self, debit_proof: DebitAgreementProof) -> Outcome<TransferRegistrationSent> {
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_debit_proof(&debit_proof).is_ok() {
+        if self.verify_debit_proof(&debit_proof).is_err() {
             return Err(Error::InvalidSignature);
         }
         match self
@@ -235,7 +236,7 @@ impl<V: ReplicaValidator> Actor<V> {
         {
             Ok(is_sequential) => {
                 if is_sequential {
-                    Ok(TransferRegistrationSent { debit_proof })
+                    Outcome::success(TransferRegistrationSent { debit_proof })
                 } else {
                     Err(Error::from("Non-sequential opertaion")) // "Non-sequential operation"
                 }
@@ -257,22 +258,22 @@ impl<V: ReplicaValidator> Actor<V> {
     /// This also ensures that we receive transfers initiated at other Actor instances (same id or other,
     /// i.e. with multiple instances of same Actor we can also sync debits made on other isntances).
     /// Todo: This looks to be handling the case when there is a transfer in flight from this client
-    /// (i.e. self.next_debit_version has been incremented, but transfer not yet accumulated).
+    /// (i.e. self.next_expected_debit has been incremented, but transfer not yet accumulated).
     /// Just make sure this is 100% the case as well.
-    pub fn synch(&self, events: Vec<ReplicaEvent>) -> Result<TransfersSynched> {
+    pub fn synch(&self, events: Vec<ReplicaEvent>) -> Outcome<TransfersSynched> {
         let credits = self.validate_credits(&events);
         let debits = self.validate_debits(events);
 
-        if credits.len() > 0 || debits.len() > 0 {
-            Ok(TransfersSynched { credits, debits })
+        if !credits.is_empty() || !debits.is_empty() {
+            Outcome::success(TransfersSynched { credits, debits })
         } else {
             Err(Error::from("No credits or debits found to sync to actor"))
         }
     }
 
-    fn validate_credits(&self, events: &Vec<ReplicaEvent>) -> Vec<ReceivedCredit> {
+    fn validate_credits(&self, events: &[ReplicaEvent]) -> Vec<ReceivedCredit> {
         let valid_credits: Vec<_> = events
-            .into_iter()
+            .iter()
             .filter_map(|e| match e {
                 ReplicaEvent::TransferPropagated(e) => Some(e),
                 _ => None,
@@ -296,6 +297,7 @@ impl<V: ReplicaValidator> Actor<V> {
         valid_credits
     }
 
+    #[allow(clippy::explicit_counter_loop)]
     fn validate_debits(&self, events: Vec<ReplicaEvent>) -> Vec<DebitAgreementProof> {
         let mut debits: Vec<_> = events
             .iter()
@@ -334,14 +336,15 @@ impl<V: ReplicaValidator> Actor<V> {
     /// Mutation of state.
     /// There is no validation of an event, it is assumed to have
     /// been properly validated before raised, and thus anything that breaks is a bug.
-    pub fn apply(&mut self, event: ActorEvent) {
+    pub fn apply(&mut self, event: ActorEvent) -> Result<()> {
         debug!("Applying event {:?}", event);
         match event {
             ActorEvent::TransferInitiated(e) => {
-                self.next_debit_version = e.id().counter + 1;
+                self.next_expected_debit = e.id().counter + 1;
+                Ok(())
             }
             ActorEvent::TransferValidationReceived(e) => {
-                if let Some(_) = e.proof {
+                if e.proof.is_some() {
                     // if we have a proof, then we have a valid set of replicas (potentially new) to update with
                     self.replicas = e.validation.replicas.clone();
                 }
@@ -361,28 +364,32 @@ impl<V: ReplicaValidator> Actor<V> {
                             .insert(e.validation.replicas.clone(), set);
                     }
                 }
+                Ok(())
             }
             ActorEvent::TransferRegistrationSent(e) => {
-                self.account.append(e.debit_proof.signed_transfer.transfer);
+                self.account
+                    .append(e.debit_proof.signed_transfer.transfer)?;
                 self.accumulating_validations.clear();
+                Ok(())
             }
             ActorEvent::TransfersSynched(e) => {
                 for credit in e.credits {
                     // append credits _before_ debits
                     self.account
-                        .append(credit.debit_proof.signed_transfer.transfer);
+                        .append(credit.debit_proof.signed_transfer.transfer)?;
                 }
-                let any_debits = e.debits.len() > 0;
+                let any_debits = !e.debits.is_empty();
                 for proof in e.debits {
                     // append debits _after_ credits
-                    self.account.append(proof.signed_transfer.transfer);
+                    self.account.append(proof.signed_transfer.transfer)?;
                 }
                 if any_debits {
                     // set the synchronisation counter
-                    self.next_debit_version = self.account.next_debit() - 1;
+                    self.next_expected_debit = self.account.next_debit();
                 }
+                Ok(())
             }
-        };
+        }
         // consider event log, to properly be able to reconstruct state from restart
     }
 
@@ -497,92 +504,98 @@ mod test {
         Account, Actor, ActorEvent, ReplicaValidator, TransferInitiated, TransferRegistrationSent,
     };
     use crdts::Dot;
-    use rand::Rng;
     use safe_nd::{
-        ClientFullId, DebitAgreementProof, Money, PublicKey, SafeKey, Signature, SignatureShare,
-        Transfer, TransferValidated,
+        ClientFullId, DebitAgreementProof, Error, Money, PublicKey, Result, SafeKey, Signature,
+        SignatureShare, Transfer, TransferValidated,
     };
+    use serde::Serialize;
     use std::collections::BTreeMap;
     use threshold_crypto::{SecretKey, SecretKeySet};
     struct Validator {}
 
     impl ReplicaValidator for Validator {
-        fn is_valid(&self, replica_group: PublicKey) -> bool {
+        fn is_valid(&self, _replica_group: PublicKey) -> bool {
             true
         }
     }
 
     #[test]
-    fn creates_actor() {
+    fn creates_actor() -> Result<()> {
         // Act
-        let (_actor, _sk_set) = get_actor_and_replicas_sk_set(10);
+        let (_actor, _sk_set) = get_actor_and_replicas_sk_set(10)?;
+        Ok(())
     }
 
     #[test]
-    fn initial_state_is_applied() {
+    fn initial_state_is_applied() -> Result<()> {
         // Act
         let initial_amount = 10;
-        let (actor, _sk_set) = get_actor_and_replicas_sk_set(initial_amount);
+        let (actor, _sk_set) = get_actor_and_replicas_sk_set(initial_amount)?;
         let credits = actor.credits_since(0);
         let debits = actor.debits_since(0);
-        assert!(debits.len() == 0);
+        assert!(debits.is_empty());
         assert!(credits.len() == 1);
         assert!(credits[0].amount == Money::from_nano(initial_amount));
         assert!(actor.balance() == Money::from_nano(initial_amount));
+        Ok(())
     }
 
     #[test]
-    fn initiates_transfers() {
+    fn initiates_transfers() -> Result<()> {
         // Act
-        let (actor, _sk_set) = get_actor_and_replicas_sk_set(10);
-        let debit = get_debit(&actor);
+        let (actor, _sk_set) = get_actor_and_replicas_sk_set(10)?;
+        let debit = get_debit(&actor)?;
         let mut actor = actor;
-        actor.apply(ActorEvent::TransferInitiated(debit))
+        actor.apply(ActorEvent::TransferInitiated(debit))?;
+        Ok(())
     }
 
     #[test]
-    fn can_apply_completed_transfer() {
+    fn can_apply_completed_transfer() -> Result<()> {
         // Act
-        let (actor, sk_set) = get_actor_and_replicas_sk_set(15);
-        let debit = get_debit(&actor);
+        let (actor, sk_set) = get_actor_and_replicas_sk_set(15)?;
+        let debit = get_debit(&actor)?;
         let mut actor = actor;
-        actor.apply(ActorEvent::TransferInitiated(debit.clone()));
-        let transfer_event = get_transfer_registration_sent(debit, &sk_set);
-        actor.apply(ActorEvent::TransferRegistrationSent(transfer_event));
-        assert_eq!(Money::from_nano(5), actor.balance())
+        actor.apply(ActorEvent::TransferInitiated(debit.clone()))?;
+        let transfer_event = get_transfer_registration_sent(debit, &sk_set)?;
+        actor.apply(ActorEvent::TransferRegistrationSent(transfer_event))?;
+        assert_eq!(Money::from_nano(5), actor.balance());
+        Ok(())
     }
 
     #[test]
-    fn can_apply_completed_transfers_in_succession() {
+    fn can_apply_completed_transfers_in_succession() -> Result<()> {
         // Act
-        let (actor, sk_set) = get_actor_and_replicas_sk_set(22);
-        let debit = get_debit(&actor);
+        let (actor, sk_set) = get_actor_and_replicas_sk_set(22)?;
+        let debit = get_debit(&actor)?;
         let mut actor = actor;
-        actor.apply(ActorEvent::TransferInitiated(debit.clone()));
-        let transfer_event = get_transfer_registration_sent(debit, &sk_set);
-        actor.apply(ActorEvent::TransferRegistrationSent(transfer_event));
+        actor.apply(ActorEvent::TransferInitiated(debit.clone()))?;
+        let transfer_event = get_transfer_registration_sent(debit, &sk_set)?;
+        actor.apply(ActorEvent::TransferRegistrationSent(transfer_event))?;
 
         assert_eq!(Money::from_nano(12), actor.balance()); // 22 - 10
 
-        let debit2 = get_debit(&actor);
-        actor.apply(ActorEvent::TransferInitiated(debit2.clone()));
-        let transfer_event = get_transfer_registration_sent(debit2, &sk_set);
-        actor.apply(ActorEvent::TransferRegistrationSent(transfer_event));
+        let debit2 = get_debit(&actor)?;
+        actor.apply(ActorEvent::TransferInitiated(debit2.clone()))?;
+        let transfer_event = get_transfer_registration_sent(debit2, &sk_set)?;
+        actor.apply(ActorEvent::TransferRegistrationSent(transfer_event))?;
 
         assert_eq!(Money::from_nano(2), actor.balance()); // 22 - 10 - 10
+        Ok(())
     }
 
+    #[allow(clippy::needless_range_loop)]
     #[test]
-    fn can_return_proof_for_validated_transfers() {
-        let (actor, sk_set) = get_actor_and_replicas_sk_set(22);
-        let debit = get_debit(&actor);
+    fn can_return_proof_for_validated_transfers() -> Result<()> {
+        let (actor, sk_set) = get_actor_and_replicas_sk_set(22)?;
+        let debit = get_debit(&actor)?;
         let mut actor = actor;
-
-        let validations = get_transfer_validation_vec(debit, &sk_set);
+        actor.apply(ActorEvent::TransferInitiated(debit.clone()))?;
+        let validations = get_transfer_validation_vec(debit, &sk_set)?;
 
         // 7 elders and validations
         for i in 0..7 {
-            let transfer_validation = actor.receive(validations[i].clone()).unwrap();
+            let transfer_validation = actor.receive(validations[i].clone())?.unwrap();
 
             if i < 1
             // threshold is 1
@@ -594,14 +607,22 @@ mod test {
 
             actor.apply(ActorEvent::TransferValidationReceived(
                 transfer_validation.clone(),
-            ));
+            ))?;
         }
+        Ok(())
     }
 
-    fn get_debit(actor: &Actor<Validator>) -> TransferInitiated {
-        match actor.transfer(Money::from_nano(10), get_random_pk()) {
-            Ok(event) => event,
-            Err(e) => panic!(e),
+    fn get_debit(actor: &Actor<Validator>) -> Result<TransferInitiated> {
+        let event = actor
+            .transfer(Money::from_nano(10), get_random_pk())?
+            .unwrap();
+        Ok(event)
+    }
+
+    fn try_serialize<T: Serialize>(value: T) -> Result<Vec<u8>> {
+        match bincode::serialize(&value) {
+            Ok(res) => Ok(res),
+            _ => Err(Error::from("serialization failed")),
         }
     }
 
@@ -609,9 +630,9 @@ mod test {
     fn get_transfer_validation_vec(
         transfer: TransferInitiated,
         sk_set: &SecretKeySet,
-    ) -> Vec<TransferValidated> {
-        let signed_transfer = transfer.signed_transfer.clone();
-        let serialized_signed_transfer = bincode::serialize(&signed_transfer.clone()).unwrap();
+    ) -> Result<Vec<TransferValidated>> {
+        let signed_transfer = transfer.signed_transfer;
+        let serialized_signed_transfer = try_serialize(&signed_transfer.clone())?;
         let sk_shares: Vec<_> = (0..7).map(|i| sk_set.secret_key_share(i)).collect();
         let pk_set = sk_set.public_keys();
 
@@ -635,15 +656,15 @@ mod test {
             })
         }
 
-        validated_transfers
+        Ok(validated_transfers)
     }
 
     fn get_transfer_registration_sent(
         transfer: TransferInitiated,
         sk_set: &SecretKeySet,
-    ) -> TransferRegistrationSent {
+    ) -> Result<TransferRegistrationSent> {
         let signed_transfer = transfer.signed_transfer.clone();
-        let serialized_signed_transfer = bincode::serialize(&signed_transfer.clone()).unwrap();
+        let serialized_signed_transfer = try_serialize(signed_transfer)?;
         let sk_shares: Vec<_> = (0..6).map(|i| sk_set.secret_key_share(i)).collect();
         let pk_set = sk_set.public_keys();
 
@@ -660,9 +681,10 @@ mod test {
         }
 
         // Combine them to produce the main signature.
-        let sig = pk_set
-            .combine_signatures(&sig_shares)
-            .expect("not enough shares");
+        let sig = match pk_set.combine_signatures(&sig_shares) {
+            Ok(s) => s,
+            _ => return Err(Error::from("invalid signature")),
+        };
 
         // Validate the main signature. If the shares were valid, this can't fail.
         assert!(pk_set.public_key().verify(&sig, serialized_signed_transfer));
@@ -674,12 +696,12 @@ mod test {
             replica_key: pk_set,
         };
 
-        TransferRegistrationSent {
+        Ok(TransferRegistrationSent {
             debit_proof: debit_agreement_proof,
-        }
+        })
     }
 
-    fn get_actor_and_replicas_sk_set(amount: u64) -> (Actor<Validator>, SecretKeySet) {
+    fn get_actor_and_replicas_sk_set(amount: u64) -> Result<(Actor<Validator>, SecretKeySet)> {
         let mut rng = rand::thread_rng();
         let client_safe_key = SafeKey::client(ClientFullId::new_ed25519(&mut rng));
         let client_pubkey = client_safe_key.public_key();
@@ -690,9 +712,9 @@ mod test {
         let transfer = get_transfer(sender, client_pubkey, balance);
         let replica_validator = Validator {};
         let mut account = Account::new(transfer.to);
-        account.append(transfer);
+        account.append(transfer)?;
         let actor = Actor::from_snapshot(account, client_safe_key, replicas_id, replica_validator);
-        (actor, bls_secret_key)
+        Ok((actor, bls_secret_key))
     }
 
     fn get_transfer(from: Dot<PublicKey>, to: PublicKey, amount: Money) -> Transfer {
@@ -703,6 +725,7 @@ mod test {
         }
     }
 
+    #[allow(unused)]
     fn get_random_dot() -> Dot<PublicKey> {
         Dot::new(get_random_pk(), 0)
     }

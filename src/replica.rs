@@ -6,7 +6,7 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use super::account::Account;
+use super::{account::Account, Outcome, TernaryResult};
 use log::debug;
 use safe_nd::{
     AccountId, DebitAgreementProof, Error, KnownGroupAdded, Money, PublicKey, ReplicaEvent, Result,
@@ -49,7 +49,7 @@ impl Replica {
         key_index: usize,
         peer_replicas: PublicKeySet,
         events: Vec<ReplicaEvent>,
-    ) -> Replica {
+    ) -> Result<Replica> {
         let mut instance = Replica::from_snapshot(
             secret_key,
             key_index,
@@ -59,9 +59,9 @@ impl Replica {
             Default::default(),
         );
         for e in events {
-            instance.apply(e);
+            instance.apply(e)?;
         }
-        instance
+        Ok(instance)
     }
 
     /// A new Replica instance from current state.
@@ -120,8 +120,8 @@ impl Replica {
     }
 
     /// Get the replica's PK set
-    pub fn replicas_pk_set(&self) -> Result<PublicKeySet> {
-        Ok(self.peer_replicas.clone())
+    pub fn replicas_pk_set(&self) -> Option<PublicKeySet> {
+        Some(self.peer_replicas.clone())
     }
 
     /// -----------------------------------------------------------------
@@ -134,33 +134,33 @@ impl Replica {
         &self,
         debit_proof: &DebitAgreementProof,
         f: F,
-    ) -> Result<TransferPropagated> {
+    ) -> Outcome<TransferPropagated> {
         // Genesis must be the first account.
-        if self.accounts.len() > 0 {
+        if !self.accounts.is_empty() {
             return Err(Error::InvalidOperation);
         }
         self.receive_propagated(debit_proof, f)
     }
 
     /// Adds a PK set for a a new group that we learn of.
-    pub fn add_known_group(&self, group: PublicKeySet) -> Result<KnownGroupAdded> {
+    pub fn add_known_group(&self, group: PublicKeySet) -> Outcome<KnownGroupAdded> {
         if self.other_groups.contains(&group) {
             return Err(Error::DataExists);
         }
-        Ok(KnownGroupAdded { group })
+        Outcome::success(KnownGroupAdded { group })
     }
 
     /// For now, with test money there is no from account.., money is created from thin air.
     pub fn test_validate_transfer(
         &self,
         signed_transfer: SignedTransfer,
-    ) -> Result<TransferValidated> {
+    ) -> Outcome<TransferValidated> {
         if signed_transfer.from() == signed_transfer.to() {
             Err(Error::from("Sending from and to the same account"))
         } else {
             match self.sign_validated_transfer(&signed_transfer) {
                 Err(_) => Err(Error::InvalidSignature),
-                Ok(replica_signature) => Ok(TransferValidated {
+                Ok(replica_signature) => Outcome::success(TransferValidated {
                     signed_transfer,
                     replica_signature,
                     replicas: self.peer_replicas.clone(),
@@ -170,11 +170,11 @@ impl Replica {
     }
 
     /// Step 1. Main business logic validation of a debit.
-    pub fn validate(&self, signed_transfer: SignedTransfer) -> Result<TransferValidated> {
+    pub fn validate(&self, signed_transfer: SignedTransfer) -> Outcome<TransferValidated> {
         debug!("Checking TransferValidated");
         let transfer = &signed_transfer.transfer;
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_actor_signature(&signed_transfer).is_ok() {
+        if self.verify_actor_signature(&signed_transfer).is_err() {
             return Err(Error::InvalidSignature);
         }
         if transfer.id.actor == transfer.to {
@@ -209,7 +209,7 @@ impl Replica {
 
         match self.sign_validated_transfer(&signed_transfer) {
             Err(_) => Err(Error::InvalidSignature),
-            Ok(replica_signature) => Ok(TransferValidated {
+            Ok(replica_signature) => Outcome::success(TransferValidated {
                 signed_transfer,
                 replica_signature,
                 replicas: self.peer_replicas.clone(),
@@ -222,11 +222,11 @@ impl Replica {
         &self,
         debit_proof: &DebitAgreementProof,
         f: F,
-    ) -> Result<TransferRegistered> {
+    ) -> Outcome<TransferRegistered> {
         debug!("Checking registered transfer");
 
         // Always verify signature first! (as to not leak any information).
-        if !self.verify_registered_proof(debit_proof, f).is_ok() {
+        if self.verify_registered_proof(debit_proof, f).is_err() {
             return Err(Error::InvalidSignature);
         }
 
@@ -237,7 +237,7 @@ impl Replica {
             Some(history) => match history.is_sequential(transfer) {
                 Ok(is_sequential) => {
                     if is_sequential {
-                        Ok(TransferRegistered {
+                        Outcome::success(TransferRegistered {
                             debit_proof: debit_proof.clone(),
                         })
                     } else {
@@ -255,7 +255,7 @@ impl Replica {
         &self,
         debit_proof: &DebitAgreementProof,
         f: F,
-    ) -> Result<TransferPropagated> {
+    ) -> Outcome<TransferPropagated> {
         // Always verify signature first! (as to not leak any information).
         let debiting_replicas = self.verify_propagated_proof(debit_proof, f)?;
         let already_exists = match self.accounts.get(&debit_proof.to()) {
@@ -263,11 +263,11 @@ impl Replica {
             Some(history) => history.contains(&debit_proof.id()),
         };
         if already_exists {
-            Err(Error::TransferIdExists)
+            Outcome::no_change()
         } else {
             match self.sign_proof(&debit_proof) {
                 Err(_) => Err(Error::InvalidSignature),
-                Ok(crediting_replica_sig) => Ok(TransferPropagated {
+                Ok(crediting_replica_sig) => Outcome::success(TransferPropagated {
                     debit_proof: debit_proof.clone(),
                     debiting_replicas,
                     crediting_replica_sig,
@@ -284,38 +284,41 @@ impl Replica {
     /// There is no validation of an event, it (the cmd) is assumed to have
     /// been properly validated before the fact is established (event raised),
     /// and thus anything that breaks here, is a bug in the validation..
-    pub fn apply(&mut self, event: ReplicaEvent) {
+    pub fn apply(&mut self, event: ReplicaEvent) -> Result<()> {
         match event {
             ReplicaEvent::KnownGroupAdded(e) => {
                 let _ = self.other_groups.insert(e.group);
+                Ok(())
             }
             ReplicaEvent::TransferValidated(e) => {
                 let transfer = e.signed_transfer.transfer;
                 let _ = self
                     .pending_debits
                     .insert(transfer.id.actor, transfer.id.counter);
+                Ok(())
             }
             ReplicaEvent::TransferRegistered(e) => {
                 let transfer = e.debit_proof.signed_transfer.transfer;
-                self.accounts
-                    .get_mut(&transfer.id.actor)
-                    .unwrap() // this is OK, since eventsourcing implies events are _facts_, you have a bug if it fails here..
-                    .append(transfer);
+                match self.accounts.get_mut(&transfer.id.actor) {
+                    None => return Err(Error::from("")),
+                    Some(account) => account.append(transfer)?,
+                }
+                Ok(())
             }
             ReplicaEvent::TransferPropagated(e) => {
                 let transfer = e.debit_proof.signed_transfer.transfer;
                 match self.accounts.get_mut(&transfer.to) {
-                    Some(account) => account.append(transfer),
+                    Some(account) => account.append(transfer)?,
                     None => {
                         // Creates if not exists.
                         let mut account = Account::new(transfer.to);
-                        account.append(transfer.clone());
+                        account.append(transfer.clone())?;
                         let _ = self.accounts.insert(transfer.to, account);
                     }
                 };
+                Ok(())
             }
-        };
-        // consider event log, to properly be able to reconstruct state from restart
+        }
     }
 
     /// Test-helper API to simulate Client CREDIT Transfers.
