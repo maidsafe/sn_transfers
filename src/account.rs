@@ -151,8 +151,9 @@ impl Account {
 mod test {
     use super::*;
     use crdts::Dot;
-    use safe_nd::{PublicKey, XorName};
+    use safe_nd::PublicKey;
     use threshold_crypto::SecretKey;
+    use xor_name::XorName;
 
     #[test]
     fn appends_credits() -> Result<()> {
@@ -183,11 +184,11 @@ mod test {
 
         // Assert
         assert!(account.contains(&second_credit.id));
-        assert!(account.balance() == balance.checked_add(balance).unwrap());
-        assert!(credits.len() == 2);
-        assert!(credits[1] == second_credit);
+        assert_eq!(account.balance(), balance.checked_add(balance).unwrap());
+        assert_eq!(credits.len(), 2);
+        assert_eq!(credits[1], second_credit);
         assert!(debits.is_empty());
-        assert!(account.next_debit() == 0);
+        assert_eq!(account.next_debit(), 0);
         assert!(is_sequential.is_ok() && is_sequential?);
         Ok(())
     }
@@ -221,12 +222,12 @@ mod test {
 
         // Assert
         assert!(account.contains(&first_debit.id));
-        assert!(account.balance() == Money::zero());
-        assert!(debits.len() == 1);
-        assert!(debits[0] == first_debit);
-        assert!(credits.len() == 1);
-        assert!(credits[0] == first_credit);
-        assert!(account.next_debit() == 1);
+        assert_eq!(account.balance(), Money::zero());
+        assert_eq!(debits.len(), 1);
+        assert_eq!(debits[0], first_debit);
+        assert_eq!(credits.len(), 1);
+        assert_eq!(credits[0], first_credit);
+        assert_eq!(account.next_debit(), 1);
         assert!(is_sequential.is_ok() && is_sequential?);
         Ok(())
     }
