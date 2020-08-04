@@ -234,7 +234,7 @@ mod test {
 
     #[allow(unused)]
     fn get_random_xor() -> XorName {
-        XorName::from(get_random_pk())
+        XorName::random()
     }
 
     fn get_random_pk() -> PublicKey {
