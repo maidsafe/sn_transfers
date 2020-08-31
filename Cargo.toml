@@ -28,4 +28,4 @@ simulated-payouts = ["safe-nd/simulated-payouts"]
 
 [patch.crates-io]
 safe-nd = { git = "https://github.com/maidsafe/safe-nd.git", branch = "master" }
-xor_name = { git = "https://github.com/maidsafe/xor-name.git" }
+xor_name = { git = "https://github.com/maidsafe/xor_name.git" }
