@@ -1,16 +1,16 @@
-# safe-transfers
+# sn_transfers
 The Transfer component of a Safe Network Economy
 
-|Crate|Documentation|CI|Safe Rust|
+|Crate|Documentation|Safe Rust|
 |:-:|:-:|:-:|:-:|
-|[![](http://meritbadge.herokuapp.com/safe-transfers)](https://crates.io/crates/safe-transfers)|[![Documentation](https://docs.rs/safe-transfers/badge.svg)](https://docs.rs/safe-transfers)|![](https://github.com/maidsafe/safe-transfers/workflows/Master/badge.svg)|[![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-error.svg)](https://github.com/rust-secure-code/safety-dance/)|
+|[![](http://meritbadge.herokuapp.com/sn_transfers)](https://crates.io/crates/sn_transfers)|[![Documentation](https://docs.rs/sn_transfers/badge.svg)](https://docs.rs/sn_transfers)|[![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-error.svg)](https://github.com/rust-secure-code/safety-dance/)|
 
 | [MaidSafe website](https://maidsafe.net) | [SAFE Dev Forum](https://forum.safedev.org) | [SAFE Network Forum](https://safenetforum.org) |
 |:-:|:-:|:-:|
 
 ## License
 
-This SAFE Network library is dual-licensed under the Modified BSD ([LICENSE-BSD](LICENSE-BSD) https://opensource.org/licenses/BSD-3-Clause) or the MIT license ([LICENSE-MIT](LICENSE-MIT) https://opensource.org/licenses/MIT) at your option.
+This Safe Network library is dual-licensed under the Modified BSD ([LICENSE-BSD](LICENSE-BSD) https://opensource.org/licenses/BSD-3-Clause) or the MIT license ([LICENSE-MIT](LICENSE-MIT) https://opensource.org/licenses/MIT) at your option.
 
 ## Contributing
 
