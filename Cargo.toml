@@ -1,17 +1,17 @@
 [package]
 authors = ["MaidSafe Developers <dev@maidsafe.net>"]
-description = "Implementation of Transfers in the SAFE Network."
-documentation = "https://docs.rs/safe-transfers"
+description = "Implementation of Transfers in the Safe Network."
+documentation = "https://docs.rs/sn_transfers"
 edition = "2018"
 homepage = "https://maidsafe.net"
 license = "MIT OR BSD-3-Clause"
-name = "safe-transfers"
+name = "sn_transfers"
 readme = "README.md"
-repository = "https://github.com/maidsafe/safe-transfers"
+repository = "https://github.com/maidsafe/sn_transfers"
 version = "0.1.0"
 
 [dependencies]
-# Ensure bincode version is identical to that in SAFE Client Libs and SAFE Network Data.
+# Ensure bincode version is identical to that in Safe Client Libs and Safe Network Data.
 bincode = "1.2.1"
 safe-nd = "~0.11.2"
 serde = { version = "1.0.97", features = ["derive"] }
