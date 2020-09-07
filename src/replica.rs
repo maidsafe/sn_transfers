@@ -8,7 +8,7 @@
 
 use super::{account::Account, Outcome, TernaryResult};
 use log::debug;
-use safe_nd::{
+use sn_data_types::{
     AccountId, DebitAgreementProof, Error, KnownGroupAdded, Money, PublicKey, ReplicaEvent, Result,
     SignatureShare, SignedTransfer, Transfer, TransferPropagated, TransferRegistered,
     TransferValidated,
@@ -404,7 +404,7 @@ impl Replica {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
                 // Check if proof is signed by our peers.
-                let public_key = safe_nd::PublicKey::Bls(self.peer_replicas.public_key());
+                let public_key = sn_data_types::PublicKey::Bls(self.peer_replicas.public_key());
                 let result = public_key.verify(&proof.debiting_replicas_sig, &data);
                 if result.is_ok() {
                     return result;
@@ -432,7 +432,7 @@ impl Replica {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
                 // Check if it is from our group.
-                let our_key = safe_nd::PublicKey::Bls(self.peer_replicas.public_key());
+                let our_key = sn_data_types::PublicKey::Bls(self.peer_replicas.public_key());
                 if our_key.verify(&proof.debiting_replicas_sig, &data).is_ok() {
                     return Ok(our_key);
                 }
@@ -445,7 +445,7 @@ impl Replica {
                 // TODO: Check retrospectively(using SectionProofChain) for known groups also
                 // Check all known groups of Replicas.
                 for set in &self.other_groups {
-                    let debiting_replicas = safe_nd::PublicKey::Bls(set.public_key());
+                    let debiting_replicas = sn_data_types::PublicKey::Bls(set.public_key());
                     let result = debiting_replicas.verify(&proof.debiting_replicas_sig, &data);
                     if result.is_ok() {
                         return Ok(debiting_replicas);
