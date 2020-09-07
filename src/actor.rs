@@ -14,7 +14,7 @@ use super::{
 use crdts::Dot;
 use itertools::Itertools;
 use log::{debug, warn};
-use safe_nd::{
+use sn_data_types::{
     AccountId, DebitAgreementProof, Error, Keypair, Money, ReplicaEvent, Result, Signature,
     SignatureShare, SignedTransfer, Transfer,
 };
@@ -210,7 +210,7 @@ impl<V: ReplicaValidator> Actor<V> {
                         if replicas.public_key().verify(&sig, data) {
                             proof = Some(DebitAgreementProof {
                                 signed_transfer: signed_transfer.clone(),
-                                debiting_replicas_sig: safe_nd::Signature::Bls(sig),
+                                debiting_replicas_sig: sn_data_types::Signature::Bls(sig),
                                 replica_key: replicas,
                             });
                         } // else, we have some corrupt data. (todo: Do we need to act on that fact?)
@@ -455,7 +455,7 @@ impl<V: ReplicaValidator> Actor<V> {
         match bincode::serialize(&proof.signed_transfer) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
             Ok(data) => {
-                let public_key = safe_nd::PublicKey::Bls(self.replicas.public_key());
+                let public_key = sn_data_types::PublicKey::Bls(self.replicas.public_key());
                 public_key.verify(&proof.debiting_replicas_sig, &data)
             }
         }
@@ -503,11 +503,11 @@ mod test {
         Account, Actor, ActorEvent, ReplicaValidator, TransferInitiated, TransferRegistrationSent,
     };
     use crdts::Dot;
-    use safe_nd::{
+    use serde::Serialize;
+    use sn_data_types::{
         DebitAgreementProof, Error, Keypair, Money, PublicKey, Result, Signature, SignatureShare,
         Transfer, TransferValidated,
     };
-    use serde::Serialize;
     use std::collections::BTreeMap;
     use threshold_crypto::{SecretKey, SecretKeySet};
     struct Validator {}

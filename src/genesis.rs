@@ -7,7 +7,7 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use crdts::Dot;
-use safe_nd::{
+use sn_data_types::{
     AccountId, DebitAgreementProof, Error, Money, PublicKey, Result, SignedTransfer, Transfer,
 };
 use std::collections::BTreeMap;
@@ -40,7 +40,7 @@ pub fn get_genesis(balance: u64, id: AccountId) -> Result<DebitAgreementProof> {
     let mut transfer_sig_shares = BTreeMap::new();
     let _ = transfer_sig_shares.insert(0, transfer_sig_share);
     // Combine shares to produce the main signature.
-    let actor_signature = safe_nd::Signature::Bls(
+    let actor_signature = sn_data_types::Signature::Bls(
         peer_replicas
             .combine_signatures(&transfer_sig_shares)
             .map_err(|e| Error::NetworkOther(e.to_string()))?,
@@ -57,7 +57,7 @@ pub fn get_genesis(balance: u64, id: AccountId) -> Result<DebitAgreementProof> {
     let mut transfer_sig_shares = BTreeMap::new();
     let _ = transfer_sig_shares.insert(0, transfer_sig_share);
     // Combine shares to produce the main signature.
-    let debiting_replicas_sig = safe_nd::Signature::Bls(
+    let debiting_replicas_sig = sn_data_types::Signature::Bls(
         peer_replicas
             .combine_signatures(&transfer_sig_shares)
             .map_err(|e| Error::NetworkOther(e.to_string()))?,

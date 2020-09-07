@@ -6,7 +6,7 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use safe_nd::{AccountId, Error, Money, Result, Transfer, TransferId};
+use sn_data_types::{AccountId, Error, Money, Result, Transfer, TransferId};
 use std::collections::HashSet;
 /// The balance and history of transfers for an account id.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +151,7 @@ impl Account {
 mod test {
     use super::*;
     use crdts::Dot;
-    use safe_nd::PublicKey;
+    use sn_data_types::PublicKey;
     use threshold_crypto::SecretKey;
     use xor_name::XorName;
 

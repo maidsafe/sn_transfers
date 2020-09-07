@@ -35,11 +35,11 @@ pub use self::{
     replica::Replica as TransferReplica,
 };
 
-use safe_nd::{
+use serde::{Deserialize, Serialize};
+use sn_data_types::{
     DebitAgreementProof, Error, Money, PublicKey, ReplicaEvent, Result, SignedTransfer, TransferId,
     TransferValidated,
 };
-use serde::{Deserialize, Serialize};
 
 type Outcome<T> = Result<Option<T>>;
 
@@ -184,7 +184,9 @@ mod test {
         quickcheck::{quickcheck, TestResult},
         Dot,
     };
-    use safe_nd::{AccountId, DebitAgreementProof, Keypair, Money, PublicKey, Result, Transfer};
+    use sn_data_types::{
+        AccountId, DebitAgreementProof, Keypair, Money, PublicKey, Result, Transfer,
+    };
     use std::collections::{HashMap, HashSet};
     use threshold_crypto::{PublicKeySet, SecretKey, SecretKeySet, SecretKeyShare};
 
