@@ -25,14 +25,14 @@
     unused_results
 )]
 
-mod account;
 mod actor;
 mod genesis;
 mod replica;
+mod wallet;
 
 pub use self::{
-    account::Account, actor::Actor as TransferActor, genesis::get_genesis,
-    replica::Replica as TransferReplica,
+    actor::Actor as TransferActor, genesis::get_genesis, replica::Replica as TransferReplica,
+    wallet::Wallet,
 };
 
 use serde::{Deserialize, Serialize};
@@ -177,16 +177,14 @@ pub struct TransferRegistrationSent {
 #[allow(unused)]
 mod test {
     use crate::{
-        actor::Actor, genesis, replica::Replica, Account, ActorEvent, ReplicaEvent,
-        ReplicaValidator, TransferInitiated,
+        actor::Actor, genesis, replica::Replica, ActorEvent, ReplicaEvent, ReplicaValidator,
+        TransferInitiated, Wallet,
     };
     use crdts::{
         quickcheck::{quickcheck, TestResult},
         Dot,
     };
-    use sn_data_types::{
-        AccountId, DebitAgreementProof, Keypair, Money, PublicKey, Result, Transfer,
-    };
+    use sn_data_types::{DebitAgreementProof, Keypair, Money, PublicKey, Result, Transfer};
     use std::collections::{HashMap, HashSet};
     use threshold_crypto::{PublicKeySet, SecretKey, SecretKeySet, SecretKeyShare};
 
@@ -241,8 +239,8 @@ mod test {
     #[test]
     fn genesis_can_only_be_the_first() -> Result<()> {
         let debit_proof = get_genesis()?;
-        let account_configs = hashmap![0 => 10];
-        let mut groups = get_network(1, 3, account_configs).0;
+        let wallet_configs = hashmap![0 => 10];
+        let mut groups = get_network(1, 3, wallet_configs).0;
         let previous_key = Some(PublicKey::Bls(debit_proof.replica_keys().public_key()));
         for replica in &mut groups.remove(0).replicas {
             let result = replica.genesis(&debit_proof, || previous_key);
@@ -298,9 +296,9 @@ mod test {
 
         // --- Arrange ---
         let recipient_final = sender_balance + recipient_balance;
-        let account_configs =
+        let wallet_configs =
             hashmap![sender_index => sender_balance, recipient_index => recipient_balance];
-        let (_, mut actors) = get_network(group_count, replica_count, account_configs);
+        let (_, mut actors) = get_network(group_count, replica_count, wallet_configs);
         let mut sender = actors.remove(&sender_index).unwrap();
         let mut recipient = actors.remove(&recipient_index).unwrap();
 
@@ -338,7 +336,7 @@ mod test {
     // ------------------------------------------------------------------------
 
     // 1. Init debit at Sender Actor.
-    fn init_transfer(sender: &mut TestActor, to: AccountId) -> Result<TransferInitiated> {
+    fn init_transfer(sender: &mut TestActor, to: PublicKey) -> Result<TransferInitiated> {
         let transfer = sender.actor.transfer(sender.actor.balance(), to)?.unwrap();
 
         sender
@@ -428,17 +426,17 @@ mod test {
     fn get_network(
         group_count: u8,
         replica_count: u8,
-        account_configs: HashMap<u8, u64>,
+        wallet_configs: HashMap<u8, u64>,
     ) -> (Vec<ReplicaGroup>, HashMap<u8, TestActor>) {
-        let accounts: Vec<_> = account_configs
+        let wallets: Vec<_> = wallet_configs
             .iter()
-            .map(|(index, balance)| setup_account(*balance, *index))
+            .map(|(index, balance)| setup_wallet(*balance, *index))
             .collect();
 
         let group_keys = setup_replica_group_keys(group_count, replica_count);
-        let mut replica_groups = setup_replica_groups(group_keys, accounts.clone());
+        let mut replica_groups = setup_replica_groups(group_keys, wallets.clone());
 
-        let actors: HashMap<_, _> = accounts
+        let actors: HashMap<_, _> = wallets
             .iter()
             .map(|a| (a.replica_group, setup_actor(a.clone(), &mut replica_groups)))
             .collect();
@@ -459,11 +457,11 @@ mod test {
         PublicKey::from(SecretKey::random().public_key())
     }
 
-    fn setup_account(balance: u64, replica_group: u8) -> TestAccount {
+    fn setup_wallet(balance: u64, replica_group: u8) -> TestWallet {
         let mut rng = rand::thread_rng();
         let keypair = Keypair::new_ed25519(&mut rng);
         let to = keypair.public_key();
-        let mut account = Account::new(to);
+        let mut wallet = Wallet::new(to);
 
         let amount = Money::from_nano(balance);
         let sender = Dot::new(get_random_pk(), 0);
@@ -472,23 +470,23 @@ mod test {
             to,
             amount,
         };
-        let _ = account.append(transfer);
+        let _ = wallet.append(transfer);
 
-        TestAccount {
-            account,
+        TestWallet {
+            wallet,
             keypair,
             replica_group,
         }
     }
 
-    fn setup_actor(account: TestAccount, replica_groups: &mut Vec<ReplicaGroup>) -> TestActor {
-        let replica_group = find_group(account.replica_group, replica_groups)
+    fn setup_actor(wallet: TestWallet, replica_groups: &mut Vec<ReplicaGroup>) -> TestActor {
+        let replica_group = find_group(wallet.replica_group, replica_groups)
             .unwrap()
             .clone();
 
         let actor = Actor::from_snapshot(
-            account.account,
-            account.keypair,
+            wallet.wallet,
+            wallet.keypair,
             replica_group.id.clone(),
             Validator {},
         );
@@ -529,7 +527,7 @@ mod test {
 
     fn setup_replica_groups(
         group_keys: HashMap<u8, ReplicaGroupKeys>,
-        accounts: Vec<TestAccount>,
+        wallets: Vec<TestWallet>,
     ) -> Vec<ReplicaGroup> {
         let mut other_groups_keys = HashMap::new();
         for (i, _) in group_keys.clone() {
@@ -544,26 +542,26 @@ mod test {
 
         let mut replica_groups = vec![];
         for (i, other) in &other_groups_keys {
-            let group_accounts = accounts
+            let group_wallets = wallets
                 .clone()
                 .into_iter()
                 .filter(|c| c.replica_group == *i)
-                .map(|c| (c.account.id(), c.account))
-                .collect::<HashMap<AccountId, Account>>();
+                .map(|c| (c.wallet.id(), c.wallet))
+                .collect::<HashMap<PublicKey, Wallet>>();
 
             let mut replicas = vec![];
             let group = group_keys[i].clone();
             for (secret_key, index) in group.keys {
                 let peer_replicas = group.id.clone();
                 let other_groups = other.clone();
-                let accounts = group_accounts.clone();
+                let wallets = group_wallets.clone();
                 let pending_debits = Default::default();
                 let replica = Replica::from_snapshot(
                     secret_key,
                     index,
                     peer_replicas,
                     other_groups,
-                    accounts,
+                    wallets,
                     pending_debits,
                 );
                 replicas.push(replica);
@@ -591,8 +589,8 @@ mod test {
     }
 
     #[derive(Debug, Clone)]
-    struct TestAccount {
-        account: Account,
+    struct TestWallet {
+        wallet: Wallet,
         keypair: Keypair,
         replica_group: u8,
     }

@@ -6,21 +6,21 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use sn_data_types::{AccountId, Error, Money, Result, Transfer, TransferId};
+use sn_data_types::{Error, Money, PublicKey, Result, Transfer, TransferId};
 use std::collections::HashSet;
-/// The balance and history of transfers for an account id.
+/// The balance and history of transfers for a wallet.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Account {
-    id: AccountId,
+pub struct Wallet {
+    id: PublicKey,
     balance: Money,
     credits: Vec<Transfer>,
     debits: Vec<Transfer>,
     transfer_ids: HashSet<TransferId>,
 }
 
-impl Account {
-    /// Creates a new account out of a credit.
-    pub fn new(id: AccountId) -> Self {
+impl Wallet {
+    /// Creates a new wallet out of a credit.
+    pub fn new(id: PublicKey) -> Self {
         Self {
             id,
             balance: Money::zero(),
@@ -30,8 +30,8 @@ impl Account {
         }
     }
 
-    /// Get the id of the account.
-    pub fn id(&self) -> AccountId {
+    /// Get the id of the wallet.
+    pub fn id(&self) -> PublicKey {
         self.id
     }
 
@@ -55,7 +55,7 @@ impl Account {
     pub fn is_sequential(&self, transfer: &Transfer) -> Result<bool> {
         let id = transfer.id;
         if id.actor != self.id {
-            Err(Error::from("Account operation is non-sequential"))
+            Err(Error::from("Wallet operation is non-sequential"))
         } else {
             match self.debits.last() {
                 None => Ok(id.counter == 0), // if no debits have been made, transfer counter must be 0
@@ -104,7 +104,7 @@ impl Account {
             Ok(())
         } else {
             Err(Error::from(format!(
-                "Transfer does not belong to this account({:?}): transfer: {:?}",
+                "Transfer does not belong to this wallet({:?}): transfer: {:?}",
                 self.id, transfer
             )))
         }
@@ -122,7 +122,7 @@ impl Account {
             self.credits.push(transfer);
         } else {
             panic!(
-                "Credit transfer does not belong to this account({:?}): transfer: {:?}",
+                "Credit transfer does not belong to this wallet({:?}): transfer: {:?}",
                 self.id, transfer
             )
         }
@@ -140,7 +140,7 @@ impl Account {
             self.debits.push(transfer);
         } else {
             panic!(
-                "Debit transfer does not belong to this account({:?}): transfer: {:?}",
+                "Debit transfer does not belong to this wallet({:?}): transfer: {:?}",
                 self.id, transfer
             )
         }
@@ -164,8 +164,8 @@ mod test {
             to: get_random_pk(),
             amount: balance,
         };
-        let mut account = Account::new(first_credit.to);
-        account.append(first_credit.clone())?;
+        let mut wallet = Wallet::new(first_credit.to);
+        wallet.append(first_credit.clone())?;
         let second_credit = Transfer {
             id: Dot::new(get_random_pk(), 0),
             to: first_credit.to,
@@ -173,22 +173,22 @@ mod test {
         };
 
         // Act
-        account.append(second_credit.clone())?;
-        let credits = account.credits_since(0);
-        let debits = account.debits_since(0);
-        let is_sequential = account.is_sequential(&Transfer {
+        wallet.append(second_credit.clone())?;
+        let credits = wallet.credits_since(0);
+        let debits = wallet.debits_since(0);
+        let is_sequential = wallet.is_sequential(&Transfer {
             id: Dot::new(first_credit.to, 0),
             to: get_random_pk(),
             amount: balance,
         });
 
         // Assert
-        assert!(account.contains(&second_credit.id));
-        assert_eq!(account.balance(), balance.checked_add(balance).unwrap());
+        assert!(wallet.contains(&second_credit.id));
+        assert_eq!(wallet.balance(), balance.checked_add(balance).unwrap());
         assert_eq!(credits.len(), 2);
         assert_eq!(credits[1], second_credit);
         assert!(debits.is_empty());
-        assert_eq!(account.next_debit(), 0);
+        assert_eq!(wallet.next_debit(), 0);
         assert!(is_sequential.is_ok() && is_sequential?);
         Ok(())
     }
@@ -202,8 +202,8 @@ mod test {
             to: get_random_pk(),
             amount: balance,
         };
-        let mut account = Account::new(first_credit.to);
-        account.append(first_credit.clone())?;
+        let mut wallet = Wallet::new(first_credit.to);
+        wallet.append(first_credit.clone())?;
         let first_debit = Transfer {
             id: Dot::new(first_credit.to, 0),
             to: get_random_pk(),
@@ -211,23 +211,23 @@ mod test {
         };
 
         // Act
-        account.append(first_debit.clone())?;
-        let credits = account.credits_since(0);
-        let debits = account.debits_since(0);
-        let is_sequential = account.is_sequential(&Transfer {
+        wallet.append(first_debit.clone())?;
+        let credits = wallet.credits_since(0);
+        let debits = wallet.debits_since(0);
+        let is_sequential = wallet.is_sequential(&Transfer {
             id: Dot::new(first_credit.to, 1),
             to: get_random_pk(),
             amount: balance,
         });
 
         // Assert
-        assert!(account.contains(&first_debit.id));
-        assert_eq!(account.balance(), Money::zero());
+        assert!(wallet.contains(&first_debit.id));
+        assert_eq!(wallet.balance(), Money::zero());
         assert_eq!(debits.len(), 1);
         assert_eq!(debits[0], first_debit);
         assert_eq!(credits.len(), 1);
         assert_eq!(credits[0], first_credit);
-        assert_eq!(account.next_debit(), 1);
+        assert_eq!(wallet.next_debit(), 1);
         assert!(is_sequential.is_ok() && is_sequential?);
         Ok(())
     }

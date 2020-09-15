@@ -7,7 +7,7 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::{
-    account::Account, ActorEvent, Outcome, ReceivedCredit, ReplicaValidator, TernaryResult,
+    wallet::Wallet, ActorEvent, Outcome, ReceivedCredit, ReplicaValidator, TernaryResult,
     TransferInitiated, TransferRegistrationSent, TransferValidated, TransferValidationReceived,
     TransfersSynched,
 };
@@ -15,7 +15,7 @@ use crdts::Dot;
 use itertools::Itertools;
 use log::{debug, warn};
 use sn_data_types::{
-    AccountId, DebitAgreementProof, Error, Keypair, Money, ReplicaEvent, Result, Signature,
+    DebitAgreementProof, Error, Keypair, Money, PublicKey, ReplicaEvent, Result, Signature,
     SignatureShare, SignedTransfer, Transfer,
 };
 use std::collections::{BTreeMap, HashSet};
@@ -36,10 +36,10 @@ pub struct SecretKeyShare {
 /// It also syncs transfers from the Replicas.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Actor<V: ReplicaValidator> {
-    id: AccountId,
+    id: PublicKey,
     keypair: Keypair,
     /// Set of all transfers impacting a given identity
-    account: Account,
+    wallet: Wallet,
     /// Ensures that the actor's transfer
     /// initiations (ValidateTransfer cmd) are sequential.
     next_expected_debit: u64,
@@ -57,7 +57,7 @@ impl<V: ReplicaValidator> Actor<V> {
     /// Use this ctor for a new instance,
     /// or to rehydrate from events ([see the synch method](Actor::synch)).
     /// Pass in the key set of the replicas of this actor, i.e. our replicas.
-    /// Credits to our account are most likely debited at other replicas than our own (the sender's replicas),
+    /// Credits to our wallet are most likely debited at other replicas than our own (the sender's replicas),
     /// The replica_validator lets upper layer decide how to validate those remote replicas (i.e. not our replicas).
     /// If upper layer trusts them, the validator might do nothing but return "true".
     /// If it wants to execute some logic for verifying that the remote replicas are in fact part of the system,
@@ -69,7 +69,7 @@ impl<V: ReplicaValidator> Actor<V> {
             keypair,
             replicas,
             replica_validator,
-            account: Account::new(id),
+            wallet: Wallet::new(id),
             next_expected_debit: 0,
             accumulating_validations: Default::default(),
         }
@@ -77,7 +77,7 @@ impl<V: ReplicaValidator> Actor<V> {
 
     /// Temp, for test purposes
     pub fn from_snapshot(
-        account: Account,
+        wallet: Wallet,
         keypair: Keypair,
         replicas: PublicKeySet,
         replica_validator: V,
@@ -88,7 +88,7 @@ impl<V: ReplicaValidator> Actor<V> {
             keypair,
             replicas,
             replica_validator,
-            account,
+            wallet,
             next_expected_debit: 0,
             accumulating_validations: Default::default(),
         }
@@ -99,23 +99,23 @@ impl<V: ReplicaValidator> Actor<V> {
     /// -----------------------------------------------------------------
 
     /// Query for the id of the Actor.
-    pub fn id(&self) -> AccountId {
+    pub fn id(&self) -> PublicKey {
         self.id
     }
 
     /// Query for new credits since specified index.
     pub fn credits_since(&self, index: usize) -> Vec<Transfer> {
-        self.account.credits_since(index)
+        self.wallet.credits_since(index)
     }
 
     /// Query for new debits since specified index.
     pub fn debits_since(&self, index: usize) -> Vec<Transfer> {
-        self.account.debits_since(index)
+        self.wallet.debits_since(index)
     }
 
     /// Query for the balance of the Actor.
     pub fn balance(&self) -> Money {
-        self.account.balance()
+        self.wallet.balance()
     }
 
     /// -----------------------------------------------------------------
@@ -123,15 +123,15 @@ impl<V: ReplicaValidator> Actor<V> {
     /// -----------------------------------------------------------------
 
     /// Step 1. Build a valid cmd for validation of a debit.
-    pub fn transfer(&self, amount: Money, to: AccountId) -> Outcome<TransferInitiated> {
+    pub fn transfer(&self, amount: Money, to: PublicKey) -> Outcome<TransferInitiated> {
         if to == self.id {
             return Outcome::rejected(Error::from("Sender and recipient are the same"));
         }
 
-        let id = Dot::new(self.id, self.account.next_debit());
+        let id = Dot::new(self.id, self.wallet.next_debit());
 
         // ensures one debit is completed at a time
-        if self.next_expected_debit != self.account.next_debit() {
+        if self.next_expected_debit != self.wallet.next_debit() {
             return Outcome::rejected(Error::from("Current pending debit has not been completed"));
         }
         if self.next_expected_debit != id.counter {
@@ -231,7 +231,7 @@ impl<V: ReplicaValidator> Actor<V> {
             return Err(Error::InvalidSignature);
         }
         match self
-            .account
+            .wallet
             .is_sequential(&debit_proof.signed_transfer.transfer)
         {
             Ok(is_sequential) => {
@@ -244,7 +244,7 @@ impl<V: ReplicaValidator> Actor<V> {
             Err(_) => {
                 warn!("Invalid operation in transfer actor.");
                 Err(Error::InvalidOperation)
-            } // from this place this code won't happen, but account validates the transfer is actually debits from it's owner.
+            } // from this place this code won't happen, but wallet validates the transfer is actually debits from it's owner.
         }
     }
 
@@ -291,7 +291,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 self.verify_credit_proof(_credit).is_ok()
             })
             .filter(|credit| self.id == credit.to())
-            .filter(|credit| !self.account.contains(&credit.id()))
+            .filter(|credit| !self.wallet.contains(&credit.id()))
             .collect();
 
         valid_credits
@@ -308,7 +308,7 @@ impl<V: ReplicaValidator> Actor<V> {
             .unique_by(|e| e.id())
             .map(|e| &e.debit_proof)
             .filter(|debit| self.id == debit.from())
-            .filter(|debit| debit.id().counter >= self.account.next_debit())
+            .filter(|debit| debit.id().counter >= self.wallet.next_debit())
             .filter(|debit| self.verify_debit_proof(debit).is_ok())
             .collect();
 
@@ -318,7 +318,7 @@ impl<V: ReplicaValidator> Actor<V> {
         let mut valid_debits = vec![];
         for out in debits {
             let version = out.id().counter;
-            let expected_version = iter + self.account.next_debit();
+            let expected_version = iter + self.wallet.next_debit();
             if version != expected_version {
                 break; // since it's sorted, if first is not matching, then no point continuing
             }
@@ -367,25 +367,24 @@ impl<V: ReplicaValidator> Actor<V> {
                 Ok(())
             }
             ActorEvent::TransferRegistrationSent(e) => {
-                self.account
-                    .append(e.debit_proof.signed_transfer.transfer)?;
+                self.wallet.append(e.debit_proof.signed_transfer.transfer)?;
                 self.accumulating_validations.clear();
                 Ok(())
             }
             ActorEvent::TransfersSynched(e) => {
                 for credit in e.credits {
                     // append credits _before_ debits
-                    self.account
+                    self.wallet
                         .append(credit.debit_proof.signed_transfer.transfer)?;
                 }
                 let any_debits = !e.debits.is_empty();
                 for proof in e.debits {
                     // append debits _after_ credits
-                    self.account.append(proof.signed_transfer.transfer)?;
+                    self.wallet.append(proof.signed_transfer.transfer)?;
                 }
                 if any_debits {
                     // set the synchronisation counter
-                    self.next_expected_debit = self.account.next_debit();
+                    self.next_expected_debit = self.wallet.next_debit();
                 }
                 Ok(())
             }
@@ -500,7 +499,7 @@ impl<V: ReplicaValidator> Actor<V> {
 #[cfg(test)]
 mod test {
     use super::{
-        Account, Actor, ActorEvent, ReplicaValidator, TransferInitiated, TransferRegistrationSent,
+        Actor, ActorEvent, ReplicaValidator, TransferInitiated, TransferRegistrationSent, Wallet,
     };
     use crdts::Dot;
     use serde::Serialize;
@@ -710,9 +709,9 @@ mod test {
         let sender = Dot::new(get_random_pk(), 0);
         let transfer = get_transfer(sender, client_pubkey, balance);
         let replica_validator = Validator {};
-        let mut account = Account::new(transfer.to);
-        account.append(transfer)?;
-        let actor = Actor::from_snapshot(account, keypair, replicas_id, replica_validator);
+        let mut wallet = Wallet::new(transfer.to);
+        wallet.append(transfer)?;
+        let actor = Actor::from_snapshot(wallet, keypair, replicas_id, replica_validator);
         Ok((actor, bls_secret_key))
     }
 
