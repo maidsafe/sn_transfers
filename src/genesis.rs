@@ -8,13 +8,13 @@
 
 use crdts::Dot;
 use sn_data_types::{
-    AccountId, DebitAgreementProof, Error, Money, PublicKey, Result, SignedTransfer, Transfer,
+    DebitAgreementProof, Error, Money, PublicKey, Result, SignedTransfer, Transfer,
 };
 use std::collections::BTreeMap;
 use threshold_crypto::{SecretKey, SecretKeySet};
 
 /// Produces a genesis balance for a new network.
-pub fn get_genesis(balance: u64, id: AccountId) -> Result<DebitAgreementProof> {
+pub fn get_genesis(balance: u64, id: PublicKey) -> Result<DebitAgreementProof> {
     let index = 0;
     let threshold = 0;
     // Nothing comes before genesis, it is a paradox

@@ -6,10 +6,10 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use super::{account::Account, Outcome, TernaryResult};
+use super::{wallet::Wallet, Outcome, TernaryResult};
 use log::debug;
 use sn_data_types::{
-    AccountId, DebitAgreementProof, Error, KnownGroupAdded, Money, PublicKey, ReplicaEvent, Result,
+    DebitAgreementProof, Error, KnownGroupAdded, Money, PublicKey, ReplicaEvent, Result,
     SignatureShare, SignedTransfer, Transfer, TransferPropagated, TransferRegistered,
     TransferValidated,
 };
@@ -18,8 +18,8 @@ use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKeyShare};
 
 /// The Replica is the part of an AT2 system
 /// that forms validating groups, and signs
-/// individual transfers between accounts.
-/// Replicas validate requests to debit an account, and
+/// individual transfers between wallets.
+/// Replicas validate requests to debit an wallet, and
 /// apply operations that has a valid "debit agreement proof"
 /// from the group, i.e. signatures from a quorum of its peers.
 /// Replicas don't initiate transfers or drive the algo - only Actors do.
@@ -35,11 +35,11 @@ pub struct Replica {
     peer_replicas: PublicKeySet,
     /// PK sets of other known groups of Replicas.
     other_groups: HashSet<PublicKeySet>,
-    /// All accounts that this Replica validates transfers for.
-    accounts: HashMap<AccountId, Account>,
-    /// Ensures that invidual account's debit
+    /// All wallets that this Replica validates transfers for.
+    wallets: HashMap<PublicKey, Wallet>,
+    /// Ensures that invidual wallet's debit
     /// initiations (ValidateTransfer cmd) are sequential.
-    pending_debits: HashMap<AccountId, u64>,
+    pending_debits: HashMap<PublicKey, u64>,
 }
 
 impl Replica {
@@ -70,8 +70,8 @@ impl Replica {
         key_index: usize,
         peer_replicas: PublicKeySet,
         other_groups: HashSet<PublicKeySet>,
-        accounts: HashMap<AccountId, Account>,
-        pending_debits: HashMap<AccountId, u64>,
+        wallets: HashMap<PublicKey, Wallet>,
+        pending_debits: HashMap<PublicKey, u64>,
     ) -> Replica {
         let id = secret_key.public_key_share();
         Replica {
@@ -80,7 +80,7 @@ impl Replica {
             key_index,
             peer_replicas,
             other_groups,
-            accounts,
+            wallets,
             pending_debits,
         }
     }
@@ -94,8 +94,8 @@ impl Replica {
     /// since there is no absolute order on the credits!
     /// Includes the credit at specified index (which may,
     /// or may not, be the same as the one that the Actor has at the same index).
-    pub fn credits_since(&self, account_id: &AccountId, index: usize) -> Option<Vec<Transfer>> {
-        match self.accounts.get(&account_id).cloned() {
+    pub fn credits_since(&self, wallet_id: &PublicKey, index: usize) -> Option<Vec<Transfer>> {
+        match self.wallets.get(&wallet_id).cloned() {
             None => None,
             Some(history) => Some(history.credits_since(index)),
         }
@@ -103,16 +103,16 @@ impl Replica {
 
     /// Query for new debits transfers since specified index.
     /// Includes the debit at specified index.
-    pub fn debits_since(&self, account_id: &AccountId, index: usize) -> Option<Vec<Transfer>> {
-        match self.accounts.get(&account_id).cloned() {
+    pub fn debits_since(&self, wallet_id: &PublicKey, index: usize) -> Option<Vec<Transfer>> {
+        match self.wallets.get(&wallet_id).cloned() {
             None => None,
             Some(history) => Some(history.debits_since(index)),
         }
     }
 
     ///
-    pub fn balance(&self, account_id: &AccountId) -> Option<Money> {
-        let result = self.accounts.get(account_id);
+    pub fn balance(&self, wallet_id: &PublicKey) -> Option<Money> {
+        let result = self.wallets.get(wallet_id);
         match result {
             None => None,
             Some(history) => Some(history.balance()),
@@ -135,8 +135,8 @@ impl Replica {
         debit_proof: &DebitAgreementProof,
         f: F,
     ) -> Outcome<TransferPropagated> {
-        // Genesis must be the first account.
-        if !self.accounts.is_empty() {
+        // Genesis must be the first wallet.
+        if !self.wallets.is_empty() {
             return Err(Error::InvalidOperation);
         }
         self.receive_propagated(debit_proof, f)
@@ -150,13 +150,13 @@ impl Replica {
         Outcome::success(KnownGroupAdded { group })
     }
 
-    /// For now, with test money there is no from account.., money is created from thin air.
+    /// For now, with test money there is no from wallet.., money is created from thin air.
     pub fn test_validate_transfer(
         &self,
         signed_transfer: SignedTransfer,
     ) -> Outcome<TransferValidated> {
         if signed_transfer.from() == signed_transfer.to() {
-            Err(Error::from("Sending from and to the same account"))
+            Err(Error::from("Sending from and to the same wallet"))
         } else {
             match self.sign_validated_transfer(&signed_transfer) {
                 Err(_) => Err(Error::InvalidSignature),
@@ -180,7 +180,7 @@ impl Replica {
         if transfer.id.actor == transfer.to {
             return Err(Error::from("Sender and recipient are the same."));
         }
-        if !self.accounts.contains_key(&signed_transfer.from()) {
+        if !self.wallets.contains_key(&signed_transfer.from()) {
             return Err(Error::NoSuchSender); // "{} sender does not exist (trying to transfer {} to {})."
         }
         match self.pending_debits.get(&signed_transfer.from()) {
@@ -204,7 +204,7 @@ impl Replica {
                     return Err(Error::InsufficientBalance); // "{} does not have enough money to transfer {} to {}. (balance: {})"
                 }
             }
-            None => return Err(Error::NoSuchSender), //"From account doesn't exist"
+            None => return Err(Error::NoSuchSender), //"From wallet doesn't exist"
         }
 
         match self.sign_validated_transfer(&signed_transfer) {
@@ -231,7 +231,7 @@ impl Replica {
         }
 
         let transfer = &debit_proof.signed_transfer.transfer;
-        let sender = self.accounts.get(&debit_proof.from());
+        let sender = self.wallets.get(&debit_proof.from());
         match sender {
             None => Err(Error::NoSuchSender),
             Some(history) => match history.is_sequential(transfer) {
@@ -258,7 +258,7 @@ impl Replica {
     ) -> Outcome<TransferPropagated> {
         // Always verify signature first! (as to not leak any information).
         let debiting_replicas = self.verify_propagated_proof(debit_proof, f)?;
-        let already_exists = match self.accounts.get(&debit_proof.to()) {
+        let already_exists = match self.wallets.get(&debit_proof.to()) {
             None => false,
             Some(history) => history.contains(&debit_proof.id()),
         };
@@ -299,21 +299,21 @@ impl Replica {
             }
             ReplicaEvent::TransferRegistered(e) => {
                 let transfer = e.debit_proof.signed_transfer.transfer;
-                match self.accounts.get_mut(&transfer.id.actor) {
+                match self.wallets.get_mut(&transfer.id.actor) {
                     None => return Err(Error::from("")),
-                    Some(account) => account.append(transfer)?,
+                    Some(wallet) => wallet.append(transfer)?,
                 }
                 Ok(())
             }
             ReplicaEvent::TransferPropagated(e) => {
                 let transfer = e.debit_proof.signed_transfer.transfer;
-                match self.accounts.get_mut(&transfer.to) {
-                    Some(account) => account.append(transfer)?,
+                match self.wallets.get_mut(&transfer.to) {
+                    Some(wallet) => wallet.append(transfer)?,
                     None => {
                         // Creates if not exists.
-                        let mut account = Account::new(transfer.to);
-                        account.append(transfer.clone())?;
-                        let _ = self.accounts.insert(transfer.to, account);
+                        let mut wallet = Wallet::new(transfer.to);
+                        wallet.append(transfer.clone())?;
+                        let _ = self.wallets.insert(transfer.to, wallet);
                     }
                 };
                 Ok(())
@@ -324,13 +324,13 @@ impl Replica {
     /// Test-helper API to simulate Client CREDIT Transfers.
     #[cfg(feature = "simulated-payouts")]
     pub fn credit_without_proof(&mut self, transfer: Transfer) {
-        match self.accounts.get_mut(&transfer.to) {
-            Some(account) => account.simulated_credit(transfer),
+        match self.wallets.get_mut(&transfer.to) {
+            Some(wallet) => wallet.simulated_credit(transfer),
             None => {
                 // Creates if it doesn't exist.
-                let mut account = Account::new(transfer.to);
-                account.simulated_credit(transfer.clone());
-                let _ = self.accounts.insert(transfer.to, account);
+                let mut wallet = Wallet::new(transfer.to);
+                wallet.simulated_credit(transfer.clone());
+                let _ = self.wallets.insert(transfer.to, wallet);
             }
         };
     }
@@ -338,10 +338,10 @@ impl Replica {
     /// Test-helper API to simulate Client DEBIT Transfers.
     #[cfg(feature = "simulated-payouts")]
     pub fn debit_without_proof(&mut self, transfer: Transfer) {
-        match self.accounts.get_mut(&transfer.id.actor) {
-            Some(account) => account.simulated_debit(transfer),
+        match self.wallets.get_mut(&transfer.id.actor) {
+            Some(wallet) => wallet.simulated_debit(transfer),
             None => panic!(
-                "Cannot debit from a non-existing account. this transfer caused the problem: {:?}",
+                "Cannot debit from a non-existing wallet. this transfer caused the problem: {:?}",
                 transfer
             ),
         };
@@ -362,7 +362,7 @@ impl Replica {
         }
     }
 
-    /// Replicas of the credited account, sign the debit proof
+    /// Replicas of the credited wallet, sign the debit proof
     /// for the Actor to aggregate and verify locally.
     /// An alternative to this is to have the Actor know (and trust) all other Replica groups.
     fn sign_proof(&self, proof: &DebitAgreementProof) -> Result<SignatureShare> {
