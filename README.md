@@ -2,7 +2,7 @@
 The Transfer component of a Safe Network Economy
 
 |Crate|Documentation|Safe Rust|
-|:-:|:-:|:-:|:-:|
+|:-:|:-:|:-:|
 |[![](http://meritbadge.herokuapp.com/sn_transfers)](https://crates.io/crates/sn_transfers)|[![Documentation](https://docs.rs/sn_transfers/badge.svg)](https://docs.rs/sn_transfers)|[![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-error.svg)](https://github.com/rust-secure-code/safety-dance/)|
 
 | [MaidSafe website](https://maidsafe.net) | [SAFE Dev Forum](https://forum.safedev.org) | [SAFE Network Forum](https://safenetforum.org) |
