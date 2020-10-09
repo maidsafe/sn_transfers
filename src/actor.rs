@@ -140,6 +140,13 @@ impl<V: ReplicaValidator> Actor<V> {
         if amount > self.balance() {
             return Outcome::rejected(Error::InsufficientBalance);
         }
+
+        if amount == Money::from_nano(0) {
+            return Outcome::rejected(Error::Unexpected(
+                "Cannot send zero-value transfers".to_string(),
+            ));
+        }
+
         let transfer = Transfer { id, to, amount };
         match self.sign(&transfer) {
             Ok(actor_signature) => {
@@ -546,6 +553,21 @@ mod test {
         let mut actor = actor;
         actor.apply(ActorEvent::TransferInitiated(debit))?;
         Ok(())
+    }
+
+    #[test]
+    fn cannot_initiate_0_value_transfers() -> Result<()> {
+        let (actor, _sk_set) = get_actor_and_replicas_sk_set(10)?;
+
+        match actor.transfer(Money::from_nano(0), get_random_pk()) {
+            Ok(_) => Err(Error::from("Should not be able to send 0 value transfers")),
+            Err(error) => {
+                assert!(error
+                    .to_string()
+                    .contains("Cannot send zero-value transfers"));
+                Ok(())
+            }
+        }
     }
 
     #[test]

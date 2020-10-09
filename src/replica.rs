@@ -180,6 +180,13 @@ impl Replica {
         if transfer.id.actor == transfer.to {
             return Err(Error::from("Sender and recipient are the same."));
         }
+
+        if transfer.amount() == Money::from_nano(0) {
+            return Outcome::rejected(Error::Unexpected(
+                "Cannot send zero value transactions".to_string(),
+            ));
+        }
+
         if !self.wallets.contains_key(&signed_transfer.from()) {
             return Err(Error::NoSuchSender); // "{} sender does not exist (trying to transfer {} to {})."
         }
