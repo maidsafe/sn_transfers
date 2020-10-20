@@ -1,5 +1,5 @@
 [package]
-authors = ["MaidSafe Developers <dev@maidsafe.net>"]
+authors = [ "MaidSafe Developers <dev@maidsafe.net>" ]
 description = "Implementation of Transfers in the Safe Network."
 documentation = "https://docs.rs/sn_transfers"
 edition = "2018"
@@ -8,13 +8,11 @@ license = "MIT OR BSD-3-Clause"
 name = "sn_transfers"
 readme = "README.md"
 repository = "https://github.com/maidsafe/sn_transfers"
-version = "0.2.0"
+version = "0.2.1"
 
 [dependencies]
-# Ensure bincode version is identical to that in Safe Client Libs and Safe Network Data.
 bincode = "1.2.1"
 sn_data_types = "~0.11.7"
-serde = { version = "1.0.97", features = ["derive"] }
 crdts = "4.1.0"
 threshold_crypto = "~0.4.0"
 rand = "~0.7.3"
@@ -22,9 +20,12 @@ itertools = "~0.9.0"
 log = "~0.4.8"
 xor_name = "1.1.0"
 
+  [dependencies.serde]
+  version = "1.0.97"
+  features = [ "derive" ]
 
 [features]
-simulated-payouts = ["sn_data_types/simulated-payouts"]
+simulated-payouts = [ "sn_data_types/simulated-payouts" ]
 
-[patch.crates-io]
-xor_name = { git = "https://github.com/maidsafe/xor_name.git" }
+[patch.crates-io.xor_name]
+git = "https://github.com/maidsafe/xor_name.git"
