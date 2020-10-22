@@ -39,9 +39,10 @@ pub use self::{
 
 use serde::{Deserialize, Serialize};
 use sn_data_types::{
-    DebitAgreementProof, Error, Money, PublicKey, ReplicaEvent, Result, SignedTransfer, TransferId,
-    TransferValidated,
+    CreditAgreementProof, CreditId, DebitId, Error, Money, PublicKey, ReplicaEvent, Result,
+    SignedCredit, SignedDebit, TransferAgreementProof, TransferValidated,
 };
+use std::collections::HashSet;
 
 type Outcome<T> = Result<Option<T>>;
 
@@ -63,35 +64,30 @@ impl<T> TernaryResult<T> for Outcome<T> {
     }
 }
 
-/// A received credit, contains the DebitAgreementProof from the sender Replicas,
+/// A received credit, contains the CreditAgreementProof from the sender Replicas,
 /// as well as the public key of those Replicas, for us to verify that they are valid Replicas.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct ReceivedCredit {
-    /// The sender's aggregated Replica signatures of the sender debit.
-    pub debit_proof: DebitAgreementProof,
+    /// The sender's aggregated Replica signatures of the credit.
+    pub credit_proof: CreditAgreementProof,
     /// The public key of the signing Replicas.
     pub debiting_replicas: PublicKey,
 }
 
 impl ReceivedCredit {
     /// Get the transfer id
-    pub fn id(&self) -> TransferId {
-        self.debit_proof.id()
+    pub fn id(&self) -> &CreditId {
+        self.credit_proof.id()
     }
 
     /// Get the amount of this transfer
     pub fn amount(&self) -> Money {
-        self.debit_proof.amount()
+        self.credit_proof.amount()
     }
 
     /// Get the recipient of this transfer
-    pub fn from(&self) -> PublicKey {
-        self.debit_proof.from()
-    }
-
-    /// Get the recipient of this transfer
-    pub fn to(&self) -> PublicKey {
-        self.debit_proof.to()
+    pub fn recipient(&self) -> PublicKey {
+        self.credit_proof.recipient()
     }
 }
 
@@ -135,10 +131,10 @@ pub enum ActorEvent {
 /// instance of the same Actor.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct TransfersSynched {
-    /// Credits we don't have locally.
-    credits: Vec<ReceivedCredit>,
-    /// The debits we don't have locally.
-    debits: Vec<DebitAgreementProof>,
+    id: PublicKey,
+    balance: Money,
+    debit_version: u64,
+    credit_ids: HashSet<CreditId>,
 }
 
 /// This event is raised by the Actor after having
@@ -146,14 +142,16 @@ pub struct TransfersSynched {
 /// Replicas for validation.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct TransferInitiated {
-    /// The transfer signed by the initiating Actor.
-    pub signed_transfer: SignedTransfer,
+    /// The debit signed by the initiating Actor.
+    pub signed_debit: SignedDebit,
+    /// The credit signed by the initiating Actor.
+    pub signed_credit: SignedCredit,
 }
 
 impl TransferInitiated {
-    /// Get the transfer id
-    pub fn id(&self) -> TransferId {
-        self.signed_transfer.id()
+    /// Get the debit id
+    pub fn id(&self) -> DebitId {
+        self.signed_debit.id()
     }
 }
 
@@ -165,7 +163,7 @@ pub struct TransferValidationReceived {
     validation: TransferValidated,
     /// Added when quorum of validations
     /// have been received from Replicas.
-    pub proof: Option<DebitAgreementProof>,
+    pub proof: Option<TransferAgreementProof>,
 }
 
 /// Raised when the Actor has accumulated a
@@ -173,7 +171,7 @@ pub struct TransferValidationReceived {
 /// for sending to Replicas.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct TransferRegistrationSent {
-    debit_proof: DebitAgreementProof,
+    transfer_proof: TransferAgreementProof,
 }
 
 #[allow(unused)]
@@ -186,7 +184,10 @@ mod test {
         quickcheck::{quickcheck, TestResult},
         Dot,
     };
-    use sn_data_types::{DebitAgreementProof, Keypair, Money, PublicKey, Result, Transfer};
+    use sn_data_types::{
+        Credit, CreditAgreementProof, CreditId, Debit, Keypair, Money, PublicKey, Result, Transfer,
+        TransferAgreementProof,
+    };
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
     use threshold_crypto::{PublicKeySet, SecretKey, SecretKeySet, SecretKeyShare};
@@ -225,20 +226,20 @@ mod test {
 
     #[test]
     fn can_start_with_genesis() -> Result<()> {
-        let debit_proof = get_genesis()?;
+        let credit_proof = get_genesis()?;
         let keys = setup_replica_group_keys(1, 3);
         let mut groups = setup_replica_groups(keys, vec![]);
-        let previous_key = Some(PublicKey::Bls(debit_proof.replica_keys().public_key()));
+        let previous_key = Some(PublicKey::Bls(credit_proof.replica_keys().public_key()));
         for replica in &mut groups.remove(0).replicas {
             let result = replica
-                .genesis(&debit_proof, || previous_key)?
-                .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) Outcome".to_string()))?;
+                .genesis(&credit_proof, || previous_key)?
+                .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
             replica.apply(ReplicaEvent::TransferPropagated(result))?;
             let balance = replica
-                .balance(&debit_proof.to())
+                .balance(&credit_proof.recipient())
                 .ok_or(Error::NoSuchBalance)?;
             println!("Balance: {}", balance);
-            assert_eq!(debit_proof.amount(), balance);
+            assert_eq!(credit_proof.amount(), balance);
         }
         Ok(())
     }
@@ -318,13 +319,16 @@ mod test {
         let transfer = init_transfer(&mut sender, recipient.actor.id())?;
         // 2. Validate at Sender Replicas.
         let debit_proof = validate_at_sender_replicas(transfer, &mut sender)?
-            .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
+            .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
         // 3. Register at Sender Replicas.
         register_at_debiting_replicas(&debit_proof, &mut sender.replica_group)?;
         // 4. Propagate to Recipient Replicas.
-        let events = propagate_to_crediting_replicas(&debit_proof, &mut recipient.replica_group);
+        let events = propagate_to_crediting_replicas(
+            debit_proof.credit_proof(),
+            &mut recipient.replica_group,
+        );
         // 5. Synch at Recipient Actor.
-        synch(&mut recipient, events)?;
+        synch(&mut recipient)?;
 
         // --- Assert ---
         // Actor and Replicas have the correct balance.
@@ -349,8 +353,8 @@ mod test {
     fn init_transfer(sender: &mut TestActor, to: PublicKey) -> Result<TransferInitiated> {
         let transfer = sender
             .actor
-            .transfer(sender.actor.balance(), to)?
-            .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
+            .transfer(sender.actor.balance(), to, "asdf".to_string())?
+            .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
 
         sender
             .actor
@@ -363,16 +367,19 @@ mod test {
     fn validate_at_sender_replicas(
         transfer: TransferInitiated,
         sender: &mut TestActor,
-    ) -> Result<Option<DebitAgreementProof>> {
+    ) -> Result<Option<TransferAgreementProof>> {
         for replica in &mut sender.replica_group.replicas {
             let validated = replica
-                .validate(transfer.signed_transfer.clone())?
-                .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
+                .validate(
+                    transfer.signed_debit.clone(),
+                    transfer.signed_credit.clone(),
+                )?
+                .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
             replica.apply(ReplicaEvent::TransferValidated(validated.clone()))?;
             let validation_received = sender
                 .actor
                 .receive(validated)?
-                .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
+                .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
             sender.actor.apply(ActorEvent::TransferValidationReceived(
                 validation_received.clone(),
             ))?;
@@ -380,7 +387,7 @@ mod test {
                 let registered = sender
                     .actor
                     .register(proof.clone())?
-                    .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
+                    .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
                 sender
                     .actor
                     .apply(ActorEvent::TransferRegistrationSent(registered))?;
@@ -392,13 +399,13 @@ mod test {
 
     // 3. Register debit at Sender Replicas.
     fn register_at_debiting_replicas(
-        debit_proof: &DebitAgreementProof,
+        debit_proof: &TransferAgreementProof,
         replica_group: &mut ReplicaGroup,
     ) -> Result<()> {
         for replica in &mut replica_group.replicas {
             let registered = replica
                 .register(debit_proof, || true)?
-                .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
+                .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
             replica.apply(ReplicaEvent::TransferRegistered(registered))?;
         }
         Ok(())
@@ -406,7 +413,7 @@ mod test {
 
     // 4. Propagate credit to Recipient Replicas.
     fn propagate_to_crediting_replicas(
-        debit_proof: &DebitAgreementProof,
+        credit_proof: CreditAgreementProof,
         replica_group: &mut ReplicaGroup,
     ) -> Vec<ReplicaEvent> {
         replica_group
@@ -414,8 +421,8 @@ mod test {
             .iter_mut()
             .map(|replica| {
                 let propagated = replica
-                    .receive_propagated(debit_proof, || None)?
-                    .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
+                    .receive_propagated(&credit_proof, || None)?
+                    .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
                 replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()))?;
                 Ok(ReplicaEvent::TransferPropagated(propagated))
             })
@@ -427,11 +434,13 @@ mod test {
     }
 
     // 5. Synch at Recipient Actor.
-    fn synch(recipient: &mut TestActor, events: Vec<ReplicaEvent>) -> Result<()> {
+    fn synch(recipient: &mut TestActor) -> Result<()> {
+        let replicas = &recipient.replica_group;
+        let wallet = replicas.replicas[0].wallet(&recipient.actor.id()).unwrap();
         let transfers = recipient
             .actor
-            .synch(events)?
-            .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
+            .synch(wallet.balance, wallet.debit_version, wallet.credit_ids)?
+            .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
         recipient
             .actor
             .apply(ActorEvent::TransfersSynched(transfers))
@@ -441,7 +450,7 @@ mod test {
     // ------------------------ Setup Helpers ---------------------------------
     // ------------------------------------------------------------------------
 
-    fn get_genesis() -> Result<DebitAgreementProof> {
+    fn get_genesis() -> Result<CreditAgreementProof> {
         let balance = u32::MAX as u64 * 1_000_000_000;
         let mut rng = rand::thread_rng();
         let threshold = 0;
@@ -501,17 +510,19 @@ mod test {
     fn setup_wallet(balance: u64, replica_group: u8) -> TestWallet {
         let mut rng = rand::thread_rng();
         let keypair = Keypair::new_ed25519(&mut rng);
-        let to = keypair.public_key();
-        let mut wallet = Wallet::new(to);
+        let recipient = keypair.public_key();
+        let mut wallet = Wallet::new(recipient);
 
         let amount = Money::from_nano(balance);
         let sender = Dot::new(get_random_pk(), 0);
-        let transfer = Transfer {
-            id: sender,
-            to,
+        let debit = Debit { id: sender, amount };
+        let credit = Credit {
+            id: debit.credit_id(),
+            recipient,
             amount,
+            msg: "".to_string(),
         };
-        let _ = wallet.append(transfer);
+        let _ = wallet.apply_credit(credit);
 
         TestWallet {
             wallet,
