@@ -19,6 +19,7 @@ use sn_data_types::{
     SignatureShare, SignedTransfer, Transfer, TransferId,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 use threshold_crypto::PublicKeySet;
 
 /// A signature share, with its index in the combined collection.
@@ -37,7 +38,7 @@ pub struct SecretKeyShare {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Actor<V: ReplicaValidator> {
     id: PublicKey,
-    keypair: Keypair,
+    keypair: Arc<Keypair>,
     /// Set of all transfers impacting a given identity
     wallet: Wallet,
     /// Ensures that the actor's transfer
@@ -62,7 +63,7 @@ impl<V: ReplicaValidator> Actor<V> {
     /// If upper layer trusts them, the validator might do nothing but return "true".
     /// If it wants to execute some logic for verifying that the remote replicas are in fact part of the system,
     /// before accepting credits, it then implements that in the replica_validator.
-    pub fn new(keypair: Keypair, replicas: PublicKeySet, replica_validator: V) -> Actor<V> {
+    pub fn new(keypair: Arc<Keypair>, replicas: PublicKeySet, replica_validator: V) -> Actor<V> {
         let id = keypair.public_key();
         Actor {
             id,
@@ -78,7 +79,7 @@ impl<V: ReplicaValidator> Actor<V> {
     /// Temp, for test purposes
     pub fn from_snapshot(
         wallet: Wallet,
-        keypair: Keypair,
+        keypair: Arc<Keypair>,
         replicas: PublicKeySet,
         replica_validator: V,
     ) -> Actor<V> {
@@ -508,6 +509,7 @@ mod test {
         Transfer, TransferValidated,
     };
     use std::collections::BTreeMap;
+    use std::sync::Arc;
     use threshold_crypto::{SecretKey, SecretKeySet};
     struct Validator {}
 
@@ -726,7 +728,7 @@ mod test {
         let replica_validator = Validator {};
         let mut wallet = Wallet::new(transfer.to);
         wallet.append(transfer)?;
-        let actor = Actor::from_snapshot(wallet, keypair, replicas_id, replica_validator);
+        let actor = Actor::from_snapshot(wallet, Arc::new(keypair), replicas_id, replica_validator);
         Ok((actor, bls_secret_key))
     }
 

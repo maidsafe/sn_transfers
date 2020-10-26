@@ -186,6 +186,7 @@ mod test {
     };
     use sn_data_types::{DebitAgreementProof, Keypair, Money, PublicKey, Result, Transfer};
     use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
     use threshold_crypto::{PublicKeySet, SecretKey, SecretKeySet, SecretKeyShare};
 
     macro_rules! hashmap {
@@ -474,7 +475,7 @@ mod test {
 
         TestWallet {
             wallet,
-            keypair,
+            keypair: Arc::new(keypair),
             replica_group,
         }
     }
@@ -591,7 +592,7 @@ mod test {
     #[derive(Debug, Clone)]
     struct TestWallet {
         wallet: Wallet,
-        keypair: Keypair,
+        keypair: Arc<Keypair>,
         replica_group: u8,
     }
 
