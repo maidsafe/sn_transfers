@@ -184,7 +184,7 @@ mod test {
 
         // Assert
         assert!(wallet.contains(&second_credit.id));
-        assert_eq!(wallet.balance(), balance.checked_add(balance).unwrap());
+        assert_eq!(Some(wallet.balance()), balance.checked_add(balance));
         assert_eq!(credits.len(), 2);
         assert_eq!(credits[1], second_credit);
         assert!(debits.is_empty());
