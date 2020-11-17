@@ -610,7 +610,9 @@ mod test {
 
         // 7 elders and validations
         for i in 0..7 {
-            let transfer_validation = actor.receive(validations[i].clone())?.unwrap();
+            let transfer_validation = actor
+                .receive(validations[i].clone())?
+                .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
 
             if i < 1
             // threshold is 1
@@ -630,7 +632,7 @@ mod test {
     fn get_debit(actor: &Actor<Validator>) -> Result<TransferInitiated> {
         let event = actor
             .transfer(Money::from_nano(10), get_random_pk())?
-            .unwrap();
+            .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) Outcome".to_string()))?;
         Ok(event)
     }
 

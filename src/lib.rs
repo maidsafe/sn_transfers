@@ -177,7 +177,7 @@ pub struct TransferRegistrationSent {
 #[allow(unused)]
 mod test {
     use crate::{
-        actor::Actor, genesis, replica::Replica, ActorEvent, ReplicaEvent, ReplicaValidator,
+        actor::Actor, genesis, replica::Replica, ActorEvent, Error, ReplicaEvent, ReplicaValidator,
         TransferInitiated, Wallet,
     };
     use crdts::{
@@ -228,9 +228,13 @@ mod test {
         let mut groups = setup_replica_groups(keys, vec![]);
         let previous_key = Some(PublicKey::Bls(debit_proof.replica_keys().public_key()));
         for replica in &mut groups.remove(0).replicas {
-            let result = replica.genesis(&debit_proof, || previous_key)?.unwrap();
+            let result = replica
+                .genesis(&debit_proof, || previous_key)?
+                .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) Outcome".to_string()))?;
             replica.apply(ReplicaEvent::TransferPropagated(result))?;
-            let balance = replica.balance(&debit_proof.to()).unwrap();
+            let balance = replica
+                .balance(&debit_proof.to())
+                .ok_or_else(|| Error::NoSuchBalance)?;
             println!("Balance: {}", balance);
             assert_eq!(debit_proof.amount(), balance);
         }
@@ -300,14 +304,19 @@ mod test {
         let wallet_configs =
             hashmap![sender_index => sender_balance, recipient_index => recipient_balance];
         let (_, mut actors) = get_network(group_count, replica_count, wallet_configs);
-        let mut sender = actors.remove(&sender_index).unwrap();
-        let mut recipient = actors.remove(&recipient_index).unwrap();
+        let mut sender = actors
+            .remove(&sender_index)
+            .ok_or_else(|| Error::Unexpected("Sender missing from actors".to_string()))?;
+        let mut recipient = actors
+            .remove(&recipient_index)
+            .ok_or_else(|| Error::Unexpected("Recipient missing from actors".to_string()))?;
 
         // --- Act ---
         // 1. Init transfer at Sender Actor.
         let transfer = init_transfer(&mut sender, recipient.actor.id())?;
         // 2. Validate at Sender Replicas.
-        let debit_proof = validate_at_sender_replicas(transfer, &mut sender)?.unwrap();
+        let debit_proof = validate_at_sender_replicas(transfer, &mut sender)?
+            .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
         // 3. Register at Sender Replicas.
         register_at_debiting_replicas(&debit_proof, &mut sender.replica_group)?;
         // 4. Propagate to Recipient Replicas.
@@ -324,12 +333,10 @@ mod test {
 
     fn assert_balance(actor: TestActor, amount: Money) {
         assert!(actor.actor.balance() == amount);
-        actor
-            .replica_group
-            .replicas
-            .iter()
-            .map(|replica| replica.balance(&actor.actor.id()).unwrap())
-            .for_each(|balance| assert!(balance == amount));
+        actor.replica_group.replicas.iter().for_each(|replica| {
+            let balance = replica.balance(&actor.actor.id());
+            assert_eq!(balance, Some(amount))
+        });
     }
 
     // ------------------------------------------------------------------------
@@ -338,7 +345,10 @@ mod test {
 
     // 1. Init debit at Sender Actor.
     fn init_transfer(sender: &mut TestActor, to: PublicKey) -> Result<TransferInitiated> {
-        let transfer = sender.actor.transfer(sender.actor.balance(), to)?.unwrap();
+        let transfer = sender
+            .actor
+            .transfer(sender.actor.balance(), to)?
+            .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
 
         sender
             .actor
@@ -353,14 +363,22 @@ mod test {
         sender: &mut TestActor,
     ) -> Result<Option<DebitAgreementProof>> {
         for replica in &mut sender.replica_group.replicas {
-            let validated = replica.validate(transfer.signed_transfer.clone())?.unwrap();
+            let validated = replica
+                .validate(transfer.signed_transfer.clone())?
+                .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
             replica.apply(ReplicaEvent::TransferValidated(validated.clone()))?;
-            let validation_received = sender.actor.receive(validated)?.unwrap();
+            let validation_received = sender
+                .actor
+                .receive(validated)?
+                .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
             sender.actor.apply(ActorEvent::TransferValidationReceived(
                 validation_received.clone(),
             ))?;
             if let Some(proof) = validation_received.proof {
-                let registered = sender.actor.register(proof.clone())?.unwrap();
+                let registered = sender
+                    .actor
+                    .register(proof.clone())?
+                    .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
                 sender
                     .actor
                     .apply(ActorEvent::TransferRegistrationSent(registered))?;
@@ -376,7 +394,9 @@ mod test {
         replica_group: &mut ReplicaGroup,
     ) -> Result<()> {
         for replica in &mut replica_group.replicas {
-            let registered = replica.register(debit_proof, || true)?.unwrap();
+            let registered = replica
+                .register(debit_proof, || true)?
+                .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
             replica.apply(ReplicaEvent::TransferRegistered(registered))?;
         }
         Ok(())
@@ -391,7 +411,9 @@ mod test {
             .replicas
             .iter_mut()
             .map(|replica| {
-                let propagated = replica.receive_propagated(debit_proof, || None)?.unwrap();
+                let propagated = replica
+                    .receive_propagated(debit_proof, || None)?
+                    .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
                 replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()))?;
                 Ok(ReplicaEvent::TransferPropagated(propagated))
             })
@@ -404,7 +426,10 @@ mod test {
 
     // 5. Synch at Recipient Actor.
     fn synch(recipient: &mut TestActor, events: Vec<ReplicaEvent>) -> Result<()> {
-        let transfers = recipient.actor.synch(events)?.unwrap();
+        let transfers = recipient
+            .actor
+            .synch(events)?
+            .ok_or_else(|| Error::Unexpected("Unexpected Ok(None) outcome".to_string()))?;
         recipient
             .actor
             .apply(ActorEvent::TransfersSynched(transfers))
@@ -482,7 +507,7 @@ mod test {
 
     fn setup_actor(wallet: TestWallet, replica_groups: &mut Vec<ReplicaGroup>) -> TestActor {
         let replica_group = find_group(wallet.replica_group, replica_groups)
-            .unwrap()
+            .expect("ReplicaGroup is missing")
             .clone();
 
         let actor = Actor::from_snapshot(
