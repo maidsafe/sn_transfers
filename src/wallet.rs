@@ -112,38 +112,40 @@ impl Wallet {
 
     /// Test-helper API to simulate Client Transfers.
     #[cfg(feature = "simulated-payouts")]
-    pub fn simulated_credit(&mut self, transfer: Transfer) {
+    pub fn simulated_credit(&mut self, transfer: Transfer) -> Result<()> {
         if self.id == transfer.to {
             match self.balance.checked_add(transfer.amount) {
                 Some(amount) => self.balance = amount,
-                None => panic!("overflow when adding!"),
+                None => return Err(Error::Unexpected("overflow when adding!".to_string())),
             }
             let _ = self.transfer_ids.insert(transfer.id);
             self.credits.push(transfer);
         } else {
-            panic!(
+            return Err(Error::Unexpected(format!(
                 "Credit transfer does not belong to this wallet({:?}): transfer: {:?}",
                 self.id, transfer
-            )
+            )));
         }
+        Ok(())
     }
 
     /// Test-helper API to simulate section payments.
     #[cfg(feature = "simulated-payouts")]
-    pub fn simulated_debit(&mut self, transfer: Transfer) {
+    pub fn simulated_debit(&mut self, transfer: Transfer) -> Result<()> {
         if self.id == transfer.id.actor {
             match self.balance.checked_sub(transfer.amount) {
                 Some(amount) => self.balance = amount,
-                None => panic!("overflow when subtracting!"),
+                None => return Err(Error::Unexpected("overflow when subtracting!".to_string())),
             }
             let _ = self.transfer_ids.insert(transfer.id);
             self.debits.push(transfer);
         } else {
-            panic!(
+            return Err(Error::Unexpected(format!(
                 "Debit transfer does not belong to this wallet({:?}): transfer: {:?}",
                 self.id, transfer
-            )
+            )));
         }
+        Ok(())
     }
 }
 

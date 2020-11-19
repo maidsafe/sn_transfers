@@ -330,28 +330,29 @@ impl Replica {
 
     /// Test-helper API to simulate Client CREDIT Transfers.
     #[cfg(feature = "simulated-payouts")]
-    pub fn credit_without_proof(&mut self, transfer: Transfer) {
+    pub fn credit_without_proof(&mut self, transfer: Transfer) -> Result<()> {
         match self.wallets.get_mut(&transfer.to) {
             Some(wallet) => wallet.simulated_credit(transfer),
             None => {
                 // Creates if it doesn't exist.
                 let mut wallet = Wallet::new(transfer.to);
-                wallet.simulated_credit(transfer.clone());
+                wallet.simulated_credit(transfer.clone())?;
                 let _ = self.wallets.insert(transfer.to, wallet);
+                Ok(())
             }
-        };
+        }
     }
 
     /// Test-helper API to simulate Client DEBIT Transfers.
     #[cfg(feature = "simulated-payouts")]
-    pub fn debit_without_proof(&mut self, transfer: Transfer) {
+    pub fn debit_without_proof(&mut self, transfer: Transfer) -> Result<()> {
         match self.wallets.get_mut(&transfer.id.actor) {
             Some(wallet) => wallet.simulated_debit(transfer),
-            None => panic!(
+            None => Err(Error::Unexpected(format!(
                 "Cannot debit from a non-existing wallet. this transfer caused the problem: {:?}",
                 transfer
-            ),
-        };
+            ))),
+        }
     }
 
     /// -----------------------------------------------------------------

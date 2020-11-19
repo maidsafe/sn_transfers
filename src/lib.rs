@@ -63,7 +63,7 @@ impl<T> TernaryResult<T> for Outcome<T> {
 
 /// A received credit, contains the DebitAgreementProof from the sender Replicas,
 /// as well as the public key of those Replicas, for us to verify that they are valid Replicas.
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct ReceivedCredit {
     /// The sender's aggregated Replica signatures of the sender debit.
     pub debit_proof: DebitAgreementProof,
@@ -108,7 +108,7 @@ pub trait ReplicaValidator {
 
 /// Events raised by the Actor.
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub enum ActorEvent {
     /// Raised when a request to create
     /// a transfer validation cmd for Replicas,
@@ -131,7 +131,7 @@ pub enum ActorEvent {
 /// or unknown debits that its Replicas were holding
 /// upon the registration of them from another
 /// instance of the same Actor.
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct TransfersSynched {
     /// Credits we don't have locally.
     credits: Vec<ReceivedCredit>,
@@ -142,7 +142,7 @@ pub struct TransfersSynched {
 /// This event is raised by the Actor after having
 /// successfully created a transfer cmd to send to the
 /// Replicas for validation.
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct TransferInitiated {
     /// The transfer signed by the initiating Actor.
     pub signed_transfer: SignedTransfer,
@@ -157,7 +157,7 @@ impl TransferInitiated {
 
 /// Raised when a Replica responds with
 /// a successful validation of a transfer.
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct TransferValidationReceived {
     /// The event raised by a Replica.
     validation: TransferValidated,
@@ -169,7 +169,7 @@ pub struct TransferValidationReceived {
 /// Raised when the Actor has accumulated a
 /// quorum of validations, and produced a RegisterTransfer cmd
 /// for sending to Replicas.
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct TransferRegistrationSent {
     debit_proof: DebitAgreementProof,
 }
@@ -234,7 +234,7 @@ mod test {
             replica.apply(ReplicaEvent::TransferPropagated(result))?;
             let balance = replica
                 .balance(&debit_proof.to())
-                .ok_or_else(|| Error::NoSuchBalance)?;
+                .ok_or(Error::NoSuchBalance)?;
             println!("Balance: {}", balance);
             assert_eq!(debit_proof.amount(), balance);
         }
@@ -465,7 +465,20 @@ mod test {
         let actors: HashMap<_, _> = wallets
             .iter()
             .map(|a| (a.replica_group, setup_actor(a.clone(), &mut replica_groups)))
+            .filter_map(|(key, val)| {
+                if let Ok(actor) = val {
+                    Some((key, actor))
+                } else {
+                    None
+                }
+            })
             .collect();
+
+        assert_eq!(
+            wallets.len(),
+            actors.len(),
+            "All actor creations were not successful"
+        );
 
         (replica_groups, actors)
     }
@@ -505,9 +518,12 @@ mod test {
         }
     }
 
-    fn setup_actor(wallet: TestWallet, replica_groups: &mut Vec<ReplicaGroup>) -> TestActor {
+    fn setup_actor(
+        wallet: TestWallet,
+        replica_groups: &mut Vec<ReplicaGroup>,
+    ) -> Result<TestActor> {
         let replica_group = find_group(wallet.replica_group, replica_groups)
-            .expect("ReplicaGroup is missing")
+            .ok_or_else(|| Error::Unexpected("ReplicaGroup is missing".to_string()))?
             .clone();
 
         let actor = Actor::from_snapshot(
@@ -517,10 +533,10 @@ mod test {
             Validator {},
         );
 
-        TestActor {
+        Ok(TestActor {
             actor,
             replica_group,
-        }
+        })
     }
 
     // Create n replica groups, with k replicas in each
