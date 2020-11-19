@@ -18,7 +18,7 @@ use sn_data_types::{
     DebitAgreementProof, Error, Keypair, Money, PublicKey, ReplicaEvent, Result, Signature,
     SignatureShare, SignedTransfer, Transfer, TransferId,
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use threshold_crypto::PublicKeySet;
 
@@ -35,7 +35,7 @@ pub struct SecretKeyShare {
 /// that initiates transfers, by requesting Replicas
 /// to validate them, and then receive the proof of agreement.
 /// It also syncs transfers from the Replicas.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Actor<V: ReplicaValidator> {
     id: PublicKey,
     keypair: Arc<Keypair>,
@@ -46,7 +46,7 @@ pub struct Actor<V: ReplicaValidator> {
     next_expected_debit: u64,
     /// When a transfer is initiated, validations are accumulated here.
     /// After quorum is reached and proof produced, the set is cleared.
-    accumulating_validations: HashMap<TransferId, HashSet<TransferValidated>>,
+    accumulating_validations: HashMap<TransferId, HashMap<usize, TransferValidated>>,
     /// The PK Set of the Replicas
     replicas: PublicKeySet,
     /// The passed in replica_validator, contains the logic from upper layers
@@ -177,8 +177,8 @@ impl<V: ReplicaValidator> Actor<V> {
             return Err(Error::from("Out of order validation"));
         }
         // check if already received
-        if let Some(set) = self.accumulating_validations.get(&validation.id()) {
-            if set.contains(&validation) {
+        if let Some(map) = self.accumulating_validations.get(&validation.id()) {
+            if map.contains_key(&validation.replica_signature.index) {
                 return Err(Error::from("Already received validation"));
             }
         } else {
@@ -189,20 +189,27 @@ impl<V: ReplicaValidator> Actor<V> {
         }
 
         // TODO: Cover scenario where replica keys might have changed during an ongoing transfer.
-        // Safe to unwrap as we are checking accumulation has started already above.
-        let set = self.accumulating_validations.get(&validation.id()).unwrap();
+        let map = self
+            .accumulating_validations
+            .get(&validation.id())
+            .ok_or_else(|| {
+                Error::Unexpected(format!(
+                    "No set found for TransferID: {:?}",
+                    validation.id()
+                ))
+            })?;
 
         let mut proof = None;
         // If the previous count of accumulated + current validation coming in here,
         // is greater than the threshold, then we have reached the quorum needed
         // to build the proof. (Quorum = threshold + 1)
         let quorum =
-            set.len() + 1 > self.replicas.threshold() && self.replicas == validation.replicas;
+            map.len() + 1 > self.replicas.threshold() && self.replicas == validation.replicas;
         if quorum {
             if let Ok(data) = bincode::serialize(&signed_transfer) {
                 // collect sig shares
-                let sig_shares: BTreeMap<_, _> = set
-                    .iter()
+                let sig_shares: BTreeMap<_, _> = map
+                    .values()
                     .chain(vec![&validation])
                     .map(|v| v.replica_signature.clone())
                     .map(|s| (s.index, s.share))
@@ -348,7 +355,7 @@ impl<V: ReplicaValidator> Actor<V> {
         match event {
             ActorEvent::TransferInitiated(e) => {
                 self.next_expected_debit = e.id().counter + 1;
-                let _ = self.accumulating_validations.insert(e.id(), HashSet::new());
+                let _ = self.accumulating_validations.insert(e.id(), HashMap::new());
                 Ok(())
             }
             ActorEvent::TransferValidationReceived(e) => {
@@ -357,8 +364,8 @@ impl<V: ReplicaValidator> Actor<V> {
                     self.replicas = e.validation.replicas.clone();
                 }
                 match self.accumulating_validations.get_mut(&e.validation.id()) {
-                    Some(set) => {
-                        let _ = set.insert(e.validation);
+                    Some(map) => {
+                        let _ = map.insert(e.validation.replica_signature.index, e.validation);
                     }
                     None => return Err(Error::Unexpected(
                         "Could not find the expected transfer id among accumulating validations!"
