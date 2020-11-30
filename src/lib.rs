@@ -28,11 +28,13 @@
 mod actor;
 mod genesis;
 mod replica;
+mod replica_signing;
 mod wallet;
+mod wallet_replica;
 
 pub use self::{
     actor::Actor as TransferActor, genesis::get_genesis, replica::Replica as TransferReplica,
-    wallet::Wallet,
+    replica_signing::ReplicaSigning, wallet::Wallet, wallet_replica::WalletReplica,
 };
 
 use serde::{Deserialize, Serialize};
