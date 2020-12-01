@@ -467,7 +467,7 @@ mod test {
     ) -> (Vec<ReplicaGroup>, HashMap<u8, TestActor>) {
         let wallets: Vec<_> = wallet_configs
             .iter()
-            .map(|(index, balance)| setup_wallet(*balance, *index))
+            .filter_map(|(index, balance)| setup_wallet(*balance, *index).ok())
             .collect();
 
         let group_keys = setup_replica_group_keys(group_count, replica_count);
@@ -507,7 +507,7 @@ mod test {
         PublicKey::from(SecretKey::random().public_key())
     }
 
-    fn setup_wallet(balance: u64, replica_group: u8) -> TestWallet {
+    fn setup_wallet(balance: u64, replica_group: u8) -> Result<TestWallet> {
         let mut rng = rand::thread_rng();
         let keypair = Keypair::new_ed25519(&mut rng);
         let recipient = keypair.public_key();
@@ -517,18 +517,18 @@ mod test {
         let sender = Dot::new(get_random_pk(), 0);
         let debit = Debit { id: sender, amount };
         let credit = Credit {
-            id: debit.credit_id(),
+            id: debit.credit_id()?,
             recipient,
             amount,
             msg: "".to_string(),
         };
         let _ = wallet.apply_credit(credit);
 
-        TestWallet {
+        Ok(TestWallet {
             wallet,
             keypair: Arc::new(keypair),
             replica_group,
-        }
+        })
     }
 
     fn setup_actor(

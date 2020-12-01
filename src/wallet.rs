@@ -179,7 +179,7 @@ mod test {
         };
 
         // Act
-        wallet.apply_credit(second_credit.clone())?;
+        wallet.apply_credit(second_credit)?;
 
         // Assert
         assert_eq!(Some(wallet.balance()), balance.checked_add(balance));
@@ -205,7 +205,7 @@ mod test {
         };
 
         // Act
-        wallet.apply_debit(first_debit.clone())?;
+        wallet.apply_debit(first_debit)?;
 
         // Assert
         assert_eq!(wallet.balance(), Money::zero());
