@@ -11,6 +11,8 @@ use super::{
     Outcome, TernaryResult,
 };
 use log::debug;
+#[cfg(feature = "simulated-payouts")]
+use sn_data_types::Credit;
 use sn_data_types::{
     CreditAgreementProof, Debit, Error, KnownGroupAdded, Money, PublicKey, ReplicaEvent, Result,
     SignatureShare, SignedCredit, SignedDebit, TransferAgreementProof, TransferPropagated,
@@ -146,7 +148,7 @@ impl Replica {
     ) -> Outcome<TransferValidated> {
         if signed_debit.sender() == signed_credit.recipient() {
             Err(Error::from("Sender and recipient are the same."))
-        } else if signed_credit.id() != &signed_debit.credit_id() {
+        } else if signed_credit.id() != &signed_debit.credit_id()? {
             Err(Error::from("The credit does not correspond to the debit."))
         } else if signed_credit.amount() != signed_debit.amount() {
             Err(Error::from("Amounts must be equal."))
@@ -187,7 +189,7 @@ impl Replica {
             return Outcome::rejected(Error::InvalidSignature);
         } else if debit.sender() == credit.recipient() {
             return Outcome::rejected(Error::from("Sender and recipient are the same."));
-        } else if credit.id() != &debit.credit_id() {
+        } else if credit.id() != &debit.credit_id()? {
             return Outcome::rejected(Error::from("The credit does not correspond to the debit."));
         } else if credit.amount() != debit.amount() {
             return Outcome::rejected(Error::from("Amounts must be equal."));
@@ -346,14 +348,14 @@ impl Replica {
 
     /// Test-helper API to simulate Client CREDIT Transfers.
     #[cfg(feature = "simulated-payouts")]
-    pub fn credit_without_proof(&mut self, transfer: Transfer) -> Result<()> {
-        match self.wallets.get_mut(&transfer.to) {
-            Some(wallet) => wallet.simulated_credit(transfer),
+    pub fn credit_without_proof(&mut self, credit: Credit) -> Result<()> {
+        match self.wallets.get_mut(&credit.recipient()) {
+            Some(wallet) => wallet.simulated_credit(credit),
             None => {
                 // Creates if it doesn't exist.
-                let mut wallet = Wallet::new(transfer.to);
-                wallet.simulated_credit(transfer.clone())?;
-                let _ = self.wallets.insert(transfer.to, wallet);
+                let mut wallet = Wallet::new(credit.recipient());
+                wallet.simulated_credit(credit.clone())?;
+                let _ = self.wallets.insert(credit.recipient(), wallet);
                 Ok(())
             }
         }
@@ -361,12 +363,12 @@ impl Replica {
 
     /// Test-helper API to simulate Client DEBIT Transfers.
     #[cfg(feature = "simulated-payouts")]
-    pub fn debit_without_proof(&mut self, transfer: Transfer) -> Result<()> {
-        match self.wallets.get_mut(&transfer.id.actor) {
-            Some(wallet) => wallet.simulated_debit(transfer),
+    pub fn debit_without_proof(&mut self, debit: Debit) -> Result<()> {
+        match self.wallets.get_mut(&debit.id.actor) {
+            Some(wallet) => wallet.simulated_debit(debit),
             None => Err(Error::Unexpected(format!(
                 "Cannot debit from a non-existing wallet. this transfer caused the problem: {:?}",
-                transfer
+                debit
             ))),
         }
     }
@@ -432,7 +434,7 @@ impl Replica {
             .verify(&signed_debit.actor_signature, credit_bytes)
             .is_ok();
 
-        if valid_debit && valid_credit && credit.id() == &debit.credit_id() {
+        if valid_debit && valid_credit && credit.id() == &debit.credit_id()? {
             Ok(())
         } else {
             Err(Error::InvalidSignature)
@@ -446,7 +448,7 @@ impl Replica {
         proof: &TransferAgreementProof,
         f: F,
     ) -> Result<()> {
-        if proof.signed_credit.id() != &proof.signed_debit.credit_id() {
+        if proof.signed_credit.id() != &proof.signed_debit.credit_id()? {
             return Err(Error::NetworkOther(
                 "Credit does not correspond with the debit.".into(),
             ));

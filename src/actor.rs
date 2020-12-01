@@ -16,7 +16,7 @@ use sn_data_types::{
     Credit, CreditId, Debit, DebitId, Error, Keypair, Money, PublicKey, Result, SignatureShare,
     SignedCredit, SignedDebit, TransferAgreementProof,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use threshold_crypto::PublicKeySet;
 
@@ -143,7 +143,7 @@ impl<V: ReplicaValidator> Actor<V> {
 
         let debit = Debit { id, amount };
         let credit = Credit {
-            id: debit.credit_id(),
+            id: debit.credit_id()?,
             recipient,
             amount,
             msg,
@@ -181,7 +181,7 @@ impl<V: ReplicaValidator> Actor<V> {
         let signed_credit = &validation.signed_credit;
 
         // check if credit and debit correspond
-        if signed_credit.id() != &signed_debit.credit_id() {
+        if signed_credit.id() != &signed_debit.credit_id()? {
             return Err(Error::from("Credit does not correspond to debit."));
         }
         // check if validation was initiated by this actor
@@ -194,7 +194,7 @@ impl<V: ReplicaValidator> Actor<V> {
         }
         // check if already received
         if let Some(map) = self.accumulating_validations.get(&validation.id()) {
-            if map.contains_key(&validation.replica_signature.index) {
+            if map.contains_key(&validation.replica_debit_sig.index) {
                 return Err(Error::from("Already received validation"));
             }
         } else {
@@ -221,7 +221,7 @@ impl<V: ReplicaValidator> Actor<V> {
         // is greater than the threshold, then we have reached the quorum needed
         // to build the proof. (Quorum = threshold + 1)
         let majority =
-            set.len() + 1 > self.replicas.threshold() && self.replicas == validation.replicas;
+            map.len() + 1 > self.replicas.threshold() && self.replicas == validation.replicas;
         if majority {
             let debit_bytes = match bincode::serialize(&signed_debit) {
                 Err(_) => return Err(Error::Unexpected("Serialization error".to_string())),
@@ -351,7 +351,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 }
                 match self.accumulating_validations.get_mut(&e.validation.id()) {
                     Some(map) => {
-                        let _ = map.insert(e.validation.replica_signature.index, e.validation);
+                        let _ = map.insert(e.validation.replica_debit_sig.index, e.validation);
                     }
                     None => return Err(Error::Unexpected(
                         "Could not find the expected transfer id among accumulating validations!"
@@ -505,7 +505,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 .is_ok(),
         };
 
-        if valid_debit && valid_credit && signed_credit.id() == &signed_debit.credit_id() {
+        if valid_debit && valid_credit && signed_credit.id() == &signed_debit.credit_id()? {
             Ok(())
         } else {
             Err(Error::InvalidSignature)
@@ -763,7 +763,7 @@ mod test {
         let replicas_id = bls_secret_key.public_keys();
         let balance = Money::from_nano(amount);
         let sender = Dot::new(get_random_pk(), 0);
-        let credit = get_credit(sender, client_pubkey, balance);
+        let credit = get_credit(sender, client_pubkey, balance)?;
         let replica_validator = Validator {};
         let mut wallet = Wallet::new(credit.recipient());
         wallet.apply_credit(credit)?;
@@ -771,14 +771,14 @@ mod test {
         Ok((actor, bls_secret_key))
     }
 
-    fn get_credit(from: Dot<PublicKey>, recipient: PublicKey, amount: Money) -> Credit {
+    fn get_credit(from: Dot<PublicKey>, recipient: PublicKey, amount: Money) -> Result<Credit> {
         let debit = Debit { id: from, amount };
-        Credit {
-            id: debit.credit_id(),
+        Ok(Credit {
+            id: debit.credit_id()?,
             recipient,
             amount,
             msg: "asdf".to_string(),
-        }
+        })
     }
 
     #[allow(unused)]

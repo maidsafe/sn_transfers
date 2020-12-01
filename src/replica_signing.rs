@@ -7,7 +7,7 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::{Outcome, TernaryResult};
-use sn_data_types::{DebitAgreementProof, Error, SignatureShare, SignedTransfer};
+use sn_data_types::{Error, SignatureShare, SignedTransfer, TransferAgreementProof};
 use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKeyShare};
 
 /// The Replica is the part of an AT2 system
@@ -76,8 +76,8 @@ impl ReplicaSigning {
     /// Replicas of the credited wallet, sign the debit proof
     /// for the Actor to aggregate and verify locally.
     /// An alternative to this is to have the Actor know (and trust) all other Replica groups.
-    pub fn sign_proof(&self, debit_proof: &DebitAgreementProof) -> Outcome<SignatureShare> {
-        match bincode::serialize(debit_proof) {
+    pub fn sign_proof(&self, transfer_proof: &TransferAgreementProof) -> Outcome<SignatureShare> {
+        match bincode::serialize(transfer_proof) {
             Err(_) => Err(Error::NetworkOther("Could not serialise proof".into())),
             Ok(data) => Outcome::success(SignatureShare {
                 index: self.key_index,
