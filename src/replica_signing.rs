@@ -7,7 +7,9 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use super::{Outcome, TernaryResult};
-use sn_data_types::{Error, SignatureShare, SignedTransfer, TransferAgreementProof};
+use sn_data_types::{
+    CreditAgreementProof, Error, SignatureShare, SignedCredit, SignedDebit, SignedTransfer,
+};
 use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKeyShare};
 
 /// The Replica is the part of an AT2 system
@@ -62,10 +64,24 @@ impl ReplicaSigning {
     /// ---------------------- Cmds -------------------------------------
     /// -----------------------------------------------------------------
 
+    pub fn sign_transfer(
+        &self,
+        signed_transfer: &SignedTransfer,
+    ) -> Outcome<(SignatureShare, SignatureShare)> {
+        let replica_debit_sig = self.sign_validated_debit(&signed_transfer.debit)?;
+        let replica_credit_sig = self.sign_validated_credit(&signed_transfer.credit)?;
+        if let Some(rds) = replica_debit_sig {
+            if let Some(rcs) = replica_credit_sig {
+                return Outcome::success((rds, rcs));
+            }
+        }
+        Outcome::rejected(Error::InvalidSignature)
+    }
+
     ///
-    pub fn sign_validated_transfer(&self, transfer: &SignedTransfer) -> Outcome<SignatureShare> {
-        match bincode::serialize(transfer) {
-            Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
+    pub fn sign_validated_debit(&self, debit: &SignedDebit) -> Outcome<SignatureShare> {
+        match bincode::serialize(debit) {
+            Err(_) => Err(Error::NetworkOther("Could not serialise debit".into())),
             Ok(data) => Outcome::success(SignatureShare {
                 index: self.key_index,
                 share: self.secret_key.sign(data),
@@ -73,11 +89,20 @@ impl ReplicaSigning {
         }
     }
 
-    /// Replicas of the credited wallet, sign the debit proof
-    /// for the Actor to aggregate and verify locally.
-    /// An alternative to this is to have the Actor know (and trust) all other Replica groups.
-    pub fn sign_proof(&self, transfer_proof: &TransferAgreementProof) -> Outcome<SignatureShare> {
-        match bincode::serialize(transfer_proof) {
+    ///
+    pub fn sign_validated_credit(&self, credit: &SignedCredit) -> Outcome<SignatureShare> {
+        match bincode::serialize(credit) {
+            Err(_) => Err(Error::NetworkOther("Could not serialise credit".into())),
+            Ok(data) => Outcome::success(SignatureShare {
+                index: self.key_index,
+                share: self.secret_key.sign(data),
+            }),
+        }
+    }
+
+    ///
+    pub fn sign_credit_proof(&self, proof: &CreditAgreementProof) -> Outcome<SignatureShare> {
+        match bincode::serialize(proof) {
             Err(_) => Err(Error::NetworkOther("Could not serialise proof".into())),
             Ok(data) => Outcome::success(SignatureShare {
                 index: self.key_index,

@@ -112,7 +112,7 @@ impl WalletReplica {
 
     /// This is the one and only infusion of money to the system. Ever.
     /// It is carried out by the first node in the network.
-    pub fn genesis<F: FnOnce() -> Result<bool>>(
+    pub fn genesis<F: FnOnce() -> Result<PublicKey>>(
         &self,
         credit_proof: &CreditAgreementProof,
         past_key: F,
@@ -135,8 +135,8 @@ impl WalletReplica {
     /// For now, with test money there is no from wallet.., money is created from thin air.
     pub fn test_validate_transfer(
         &self,
-        signed_debit: SignedDebit,
-        signed_credit: SignedCredit,
+        signed_debit: &SignedDebit,
+        signed_credit: &SignedCredit,
     ) -> Outcome<()> {
         if signed_debit.sender() == signed_credit.recipient() {
             Err(Error::from("Sender and recipient are the same."))
@@ -150,7 +150,11 @@ impl WalletReplica {
     }
 
     /// Step 1. Main business logic validation of a debit.
-    pub fn validate(&self, signed_debit: SignedDebit, signed_credit: SignedCredit) -> Outcome<()> {
+    pub fn validate(
+        &self,
+        signed_debit: &SignedDebit,
+        signed_credit: &SignedCredit,
+    ) -> Outcome<()> {
         debug!("Validating transfer");
         let debit = &signed_debit.debit;
         let credit = &signed_credit.credit;
@@ -186,7 +190,7 @@ impl WalletReplica {
     }
 
     /// Step 2. Validation of agreement, and order at debit source.
-    pub fn register<F: FnOnce() -> Result<bool>>(
+    pub fn register<F: FnOnce() -> Result<PublicKey>>(
         &self,
         transfer_proof: &TransferAgreementProof,
         past_key: F,
@@ -213,7 +217,7 @@ impl WalletReplica {
 
     /// Step 3. Validation of TransferAgreementProof, and credit idempotency at credit destination.
     /// (Since this leads to a credit, there is no requirement on order.)
-    pub fn receive_propagated<F: FnOnce() -> Result<bool>>(
+    pub fn receive_propagated<F: FnOnce() -> Result<PublicKey>>(
         &self,
         credit_proof: &CreditAgreementProof,
         past_key: F,
@@ -310,7 +314,7 @@ impl WalletReplica {
 
     /// Verify that this is a valid _registered_
     /// TransferAgreementProof, i.e. signed by our peers.
-    fn verify_registered_proof<F: FnOnce() -> Result<bool>>(
+    fn verify_registered_proof<F: FnOnce() -> Result<PublicKey>>(
         &self,
         proof: &TransferAgreementProof,
         past_key: F,
@@ -337,7 +341,10 @@ impl WalletReplica {
             return Ok(());
         }
         // Check if proof is signed with an older key
-        if past_key()? {
+        let public_key = past_key()?;
+        let valid_debit = public_key.verify(&proof.debit_sig, &debit_bytes).is_ok();
+        let valid_credit = public_key.verify(&proof.credit_sig, &credit_bytes).is_ok();
+        if valid_debit && valid_credit {
             return Ok(());
         }
 
@@ -347,7 +354,7 @@ impl WalletReplica {
 
     /// Verify that this is a valid _propagated_
     /// TransferAgreementProof, i.e. signed by a group that we know of.
-    fn verify_propagated_proof<F: FnOnce() -> Result<bool>>(
+    fn verify_propagated_proof<F: FnOnce() -> Result<PublicKey>>(
         &self,
         proof: &CreditAgreementProof,
         past_key: F,
@@ -355,15 +362,22 @@ impl WalletReplica {
         // Check that the proof corresponds to a public key set of some Replicas.
         match bincode::serialize(&proof.signed_credit) {
             Err(_) => Err(Error::NetworkOther("Could not serialise transfer".into())),
-            Ok(data) => {
+            Ok(credit_bytes) => {
                 // Check if it is from our group.
                 let our_key = sn_data_types::PublicKey::Bls(self.peer_replicas.public_key());
-                if our_key.verify(&proof.debiting_replicas_sig, &data).is_ok() {
+                if our_key
+                    .verify(&proof.debiting_replicas_sig, &credit_bytes)
+                    .is_ok()
+                {
                     return Ok(());
                 }
 
-                // Check if it was previously a part of our group
-                if past_key()? {
+                // Check if proof is signed with an older key
+                let public_key = past_key()?;
+                let valid_credit = public_key
+                    .verify(&proof.debiting_replicas_sig, &credit_bytes)
+                    .is_ok();
+                if valid_credit {
                     return Ok(());
                 }
 
@@ -371,7 +385,8 @@ impl WalletReplica {
                 // Check all known groups of Replicas.
                 for set in &self.other_groups {
                     let debiting_replicas = sn_data_types::PublicKey::Bls(set.public_key());
-                    let result = debiting_replicas.verify(&proof.debiting_replicas_sig, &data);
+                    let result =
+                        debiting_replicas.verify(&proof.debiting_replicas_sig, &credit_bytes);
                     if result.is_ok() {
                         return Ok(());
                     }

@@ -6,15 +6,19 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
+use crate::wallet::WalletSnapshot;
+
 use super::{
-    wallet::Wallet, ActorEvent, Outcome, ReplicaValidator, TernaryResult, TransferInitiated,
-    TransferRegistrationSent, TransferValidated, TransferValidationReceived, TransfersSynched,
+    wallet::Wallet, ActorEvent, Outcome, ReceivedCredit, ReplicaValidator, TernaryResult,
+    TransferInitiated, TransferRegistrationSent, TransferValidated, TransferValidationReceived,
+    TransfersSynched,
 };
 use crdts::Dot;
+use itertools::Itertools;
 use log::debug;
 use sn_data_types::{
-    Credit, CreditId, Debit, DebitId, Error, Keypair, Money, PublicKey, Result, SignatureShare,
-    SignedCredit, SignedDebit, TransferAgreementProof,
+    Credit, CreditId, Debit, DebitId, Error, Keypair, Money, PublicKey, ReplicaEvent, Result,
+    SignatureShare, SignedCredit, SignedDebit, TransferAgreementProof,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -302,18 +306,7 @@ impl<V: ReplicaValidator> Actor<V> {
         }
     }
 
-    /// Step xx. Continuously receiving credits from Replicas via push or pull model, decided by upper layer.
-    /// The credits are most likely originating at an Actor whose Replicas are not the same as our Replicas.
-    /// That means that the signature on the TransferAgreementProof, is that of some Replicas we don't know.
-    /// What we do here is to use the passed in replica_validator, that injects the logic from upper layers
-    /// for determining if this remote group of Replicas is indeed valid.
-    /// It should consider our Replicas valid as well, for the rare cases when sender replicate to the same group.
     ///
-    /// This also ensures that we receive transfers initiated at other Actor instances (same id or other,
-    /// i.e. with multiple instances of same Actor we can also sync debits made on other isntances).
-    /// Todo: This looks to be handling the case when there is a transfer in flight from this client
-    /// (i.e. self.next_expected_debit has been incremented, but transfer not yet accumulated).
-    /// Just make sure this is 100% the case as well.
     pub fn synch(
         &self,
         balance: Money,
@@ -327,6 +320,100 @@ impl<V: ReplicaValidator> Actor<V> {
             debit_version,
             credit_ids,
         })
+    }
+
+    /// Step xx. Continuously receiving credits from Replicas via push or pull model, decided by upper layer.
+    /// The credits are most likely originating at an Actor whose Replicas are not the same as our Replicas.
+    /// That means that the signature on the DebitAgreementProof, is that of some Replicas we don't know.
+    /// What we do here is to use the passed in replica_validator, that injects the logic from upper layers
+    /// for determining if this remote group of Replicas is indeed valid.
+    /// It should consider our Replicas valid as well, for the rare cases when sender replicate to the same group.
+    ///
+    /// This also ensures that we receive transfers initiated at other Actor instances (same id or other,
+    /// i.e. with multiple instances of same Actor we can also sync debits made on other isntances).
+    /// Todo: This looks to be handling the case when there is a transfer in flight from this client
+    /// (i.e. self.next_expected_debit has been incremented, but transfer not yet accumulated).
+    /// Just make sure this is 100% the case as well.
+    pub fn synch_events(&self, events: Vec<ReplicaEvent>) -> Outcome<TransfersSynched> {
+        let credits = self.validate_credits(&events);
+        let debits = self.validate_debits(events);
+        if !credits.is_empty() || !debits.is_empty() {
+            let mut wallet = Wallet::new(self.id);
+            for credit in credits {
+                // append credits _before_ debits
+                wallet.apply_credit(credit.credit_proof.signed_credit.credit)?;
+            }
+            for proof in debits {
+                // append debits _after_ credits
+                wallet.apply_debit(proof.signed_debit.debit)?;
+            }
+            let snapshot: WalletSnapshot = wallet.into();
+            self.synch(
+                snapshot.balance,
+                snapshot.debit_version,
+                snapshot.credit_ids,
+            )
+        } else {
+            Err(Error::from("No credits or debits found to sync to actor"))
+        }
+    }
+
+    fn validate_credits(&self, events: &[ReplicaEvent]) -> Vec<ReceivedCredit> {
+        let valid_credits: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                ReplicaEvent::TransferPropagated(e) => Some(e),
+                _ => None,
+            })
+            .unique_by(|e| e.id())
+            .map(|e| ReceivedCredit {
+                credit_proof: e.credit_proof.clone(),
+                crediting_replica_keys: e.crediting_replica_keys,
+            })
+            .filter(|_credit| {
+                #[cfg(feature = "simulated-payouts")]
+                return true;
+
+                #[cfg(not(feature = "simulated-payouts"))]
+                self.verify_credit_proof(_credit).is_ok()
+            })
+            .filter(|credit| self.id == credit.recipient())
+            .filter(|credit| !self.wallet.contains(&credit.id()))
+            .collect();
+
+        valid_credits
+    }
+
+    #[allow(clippy::explicit_counter_loop)]
+    fn validate_debits(&self, events: Vec<ReplicaEvent>) -> Vec<TransferAgreementProof> {
+        let mut debits: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                ReplicaEvent::TransferRegistered(e) => Some(e),
+                _ => None,
+            })
+            .unique_by(|e| e.id())
+            .map(|e| &e.transfer_proof)
+            .filter(|transfer| self.id == transfer.sender())
+            .filter(|transfer| transfer.id().counter >= self.wallet.next_debit())
+            .filter(|transfer| self.verify_transfer_proof(transfer).is_ok())
+            .collect();
+
+        debits.sort_by_key(|t| t.id().counter);
+
+        let mut iter = 0;
+        let mut valid_debits = vec![];
+        for out in debits {
+            let version = out.id().counter;
+            let expected_version = iter + self.wallet.next_debit();
+            if version != expected_version {
+                break; // since it's sorted, if first is not matching, then no point continuing
+            }
+            valid_debits.push(out.clone());
+            iter += 1;
+        }
+
+        valid_debits
     }
 
     /// -----------------------------------------------------------------
@@ -464,22 +551,25 @@ impl<V: ReplicaValidator> Actor<V> {
         }
     }
 
-    // /// Verify that this is a valid ReceivedCredit.
-    // #[cfg(not(feature = "simulated-payouts"))]
-    // fn verify_credit_proof(&self, credit: &ReceivedCredit) -> Result<()> {
-    //     if !self.replica_validator.is_valid(credit.debiting_replicas) {
-    //         return Err(Error::InvalidSignature);
-    //     }
-    //     let proof = &credit.credit_proof;
+    /// Verify that this is a valid ReceivedCredit.
+    #[cfg(not(feature = "simulated-payouts"))]
+    fn verify_credit_proof(&self, credit: &ReceivedCredit) -> Result<()> {
+        if !self
+            .replica_validator
+            .is_valid(credit.crediting_replica_keys)
+        {
+            return Err(Error::InvalidSignature);
+        }
+        let proof = &credit.credit_proof;
 
-    //     // Check that the proof corresponds to a/the public key set of our Replicas.
-    //     match bincode::serialize(&proof.signed_credit) {
-    //         Err(_) => Err(Error::NetworkOther("Could not serialise credit".into())),
-    //         Ok(data) => credit
-    //             .debiting_replicas
-    //             .verify(&proof.debiting_replicas_sig, &data),
-    //     }
-    // }
+        // Check that the proof corresponds to a/the public key set of our Replicas.
+        match bincode::serialize(&proof.signed_credit) {
+            Err(_) => Err(Error::NetworkOther("Could not serialise credit".into())),
+            Ok(data) => credit
+                .crediting_replica_keys
+                .verify(&proof.debiting_replicas_sig, &data),
+        }
+    }
 
     /// Check that we signed this.
     fn verify_is_our_transfer(

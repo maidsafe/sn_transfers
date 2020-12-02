@@ -71,7 +71,7 @@ pub struct ReceivedCredit {
     /// The sender's aggregated Replica signatures of the credit.
     pub credit_proof: CreditAgreementProof,
     /// The public key of the signing Replicas.
-    pub debiting_replicas: PublicKey,
+    pub crediting_replica_keys: PublicKey,
 }
 
 impl ReceivedCredit {
