@@ -89,7 +89,12 @@ impl Wallet {
         if self.id == debit.id.actor {
             match self.balance.checked_sub(debit.amount) {
                 Some(amount) => self.balance = amount,
-                None => return Err(Error::from("overflow when subtracting!")),
+                None => {
+                    return Err(Error::Unexpected(format!(
+                        "overflow when subtracting! Balance: {}, debit: {}",
+                        self.balance, debit.amount
+                    )))
+                }
             }
             self.debit_version += 1;
             Ok(())
@@ -107,7 +112,12 @@ impl Wallet {
         if self.id == credit.recipient() {
             match self.balance.checked_add(credit.amount) {
                 Some(amount) => self.balance = amount,
-                None => return Err(Error::from("overflow when adding!")),
+                None => {
+                    return Err(Error::Unexpected(format!(
+                        "overflow when adding! Balance: {}, debit: {}",
+                        self.balance, credit.amount
+                    )))
+                }
             }
             let _ = self.credit_ids.insert(credit.id);
             Ok(())
@@ -127,7 +137,12 @@ impl Wallet {
         if self.id == credit.recipient() {
             match self.balance.checked_add(credit.amount) {
                 Some(amount) => self.balance = amount,
-                None => return Err(Error::Unexpected("overflow when adding!".to_string())),
+                None => {
+                    return Err(Error::Unexpected(format!(
+                        "overflow when adding! Balance: {}, debit: {}",
+                        self.balance, credit.amount
+                    )))
+                }
             }
         } else {
             return Err(Error::Unexpected(format!(
@@ -146,7 +161,12 @@ impl Wallet {
         if self.id == debit.id.actor {
             match self.balance.checked_sub(debit.amount) {
                 Some(amount) => self.balance = amount,
-                None => return Err(Error::Unexpected("overflow when subtracting!".to_string())),
+                None => {
+                    return Err(Error::Unexpected(format!(
+                        "overflow when subtracting! Balance: {}, debit: {}",
+                        self.balance, debit.amount
+                    )))
+                }
             }
             self.debit_version += 1;
         } else {
