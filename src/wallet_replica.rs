@@ -43,7 +43,7 @@ pub struct WalletReplica {
     wallet: Wallet,
     /// Ensures that invidual wallet's debit
     /// initiations (ValidateTransfer cmd) are sequential.
-    pending_debit: u64,
+    pending_debit: Option<u64>,
 }
 
 impl WalletReplica {
@@ -62,7 +62,7 @@ impl WalletReplica {
             peer_replicas,
             Default::default(),
             Wallet::new(id),
-            Default::default(),
+            None,
         );
 
         for e in events {
@@ -80,7 +80,7 @@ impl WalletReplica {
         peer_replicas: PublicKeySet,
         other_groups: HashSet<PublicKeySet>,
         wallet: Wallet,
-        pending_debit: u64,
+        pending_debit: Option<u64>,
     ) -> Self {
         Self {
             id,
@@ -120,7 +120,7 @@ impl WalletReplica {
         past_key: F,
     ) -> Outcome<()> {
         // Genesis must be the first credit.
-        if self.balance() != Money::zero() || self.pending_debit > 0 {
+        if self.balance() != Money::zero() || self.pending_debit.is_some() {
             return Err(Error::InvalidOperation);
         }
         self.receive_propagated(credit_proof, past_key)
@@ -178,13 +178,15 @@ impl WalletReplica {
             ));
         } else if self.wallet.id() != debit.sender() {
             return Outcome::rejected(Error::NoSuchSender);
-        } else if self.pending_debit == 0 && debit.id.counter != 0 {
+        } else if self.pending_debit.is_none() && debit.id.counter != 0 {
             return Outcome::rejected(Error::from("out of order msg, actor's counter should be 0"));
-        } else if self.pending_debit > 0 && debit.id.counter != (self.pending_debit + 1) {
-            return Outcome::rejected(Error::from(format!(
-                "out of order msg, provided count: {:?}, previous count: {:?}",
-                debit.id.counter, self.pending_debit
-            )));
+        } else if let Some(counter) = self.pending_debit {
+            if debit.id.counter != (counter + 1) {
+                return Outcome::rejected(Error::from(format!(
+                    "out of order msg, debit counter: {:?}, current counter: {:?}",
+                    debit.id.counter, counter
+                )));
+            }
         } else if debit.amount() > self.balance() {
             return Outcome::rejected(Error::InsufficientBalance);
         }
@@ -250,7 +252,7 @@ impl WalletReplica {
             }
             ReplicaEvent::TransferValidated(e) => {
                 let debit = e.signed_debit.debit;
-                self.pending_debit = debit.id.counter;
+                self.pending_debit = Some(debit.id.counter);
                 Ok(())
             }
             ReplicaEvent::TransferRegistered(e) => {
