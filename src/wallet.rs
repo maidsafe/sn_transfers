@@ -6,6 +6,7 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
+use log::debug;
 use sn_data_types::{Credit, CreditId, Debit, Error, Money, PublicKey, Result};
 use std::collections::HashSet;
 
@@ -83,6 +84,8 @@ impl Wallet {
 
     /// Mutates state.
     pub fn apply_debit(&mut self, debit: Debit) -> Result<()> {
+        debug!("Wallet applying debit");
+
         if self.id == debit.id.actor {
             match self.balance.checked_sub(debit.amount) {
                 Some(amount) => self.balance = amount,
@@ -100,6 +103,7 @@ impl Wallet {
 
     /// Mutates state.
     pub fn apply_credit(&mut self, credit: Credit) -> Result<()> {
+        debug!("Wallet applying credit");
         if self.id == credit.recipient() {
             match self.balance.checked_add(credit.amount) {
                 Some(amount) => self.balance = amount,
@@ -118,6 +122,8 @@ impl Wallet {
     /// Test-helper API to simulate Client Transfers.
     #[cfg(feature = "simulated-payouts")]
     pub fn simulated_credit(&mut self, credit: Credit) -> Result<()> {
+        debug!("Wallet simulated credit");
+
         if self.id == credit.recipient() {
             match self.balance.checked_add(credit.amount) {
                 Some(amount) => self.balance = amount,
@@ -135,6 +141,8 @@ impl Wallet {
     /// Test-helper API to simulate section payments.
     #[cfg(feature = "simulated-payouts")]
     pub fn simulated_debit(&mut self, debit: Debit) -> Result<()> {
+        debug!("Wallet simulated debit");
+
         if self.id == debit.id.actor {
             match self.balance.checked_sub(debit.amount) {
                 Some(amount) => self.balance = amount,
