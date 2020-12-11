@@ -10,7 +10,7 @@ use super::{
     wallet::{Wallet, WalletSnapshot},
     Outcome, TernaryResult,
 };
-use log::debug;
+use log::{debug, trace};
 #[cfg(feature = "simulated-payouts")]
 use sn_data_types::Credit;
 use sn_data_types::{
@@ -64,9 +64,11 @@ impl WalletReplica {
             Wallet::new(id),
             Default::default(),
         );
+
         for e in events {
             instance.apply(e)?;
         }
+
         Ok(instance)
     }
 
@@ -155,7 +157,6 @@ impl WalletReplica {
         signed_debit: &SignedDebit,
         signed_credit: &SignedCredit,
     ) -> Outcome<()> {
-        debug!("Validating transfer");
         let debit = &signed_debit.debit;
         let credit = &signed_credit.credit;
 
@@ -179,8 +180,8 @@ impl WalletReplica {
             return Outcome::rejected(Error::NoSuchSender);
         } else if debit.id.counter != (self.pending_debit + 1) {
             return Outcome::rejected(Error::from(format!(
-                "out of order msg, previous count: {:?}",
-                self.pending_debit
+                "out of order msg, provided count: {:?}, previous count: {:?}",
+                debit.id.counter, self.pending_debit
             )));
         } else if debit.amount() > self.balance() {
             return Outcome::rejected(Error::InsufficientBalance);
@@ -286,6 +287,7 @@ impl WalletReplica {
         signed_debit: &SignedDebit,
         signed_credit: &SignedCredit,
     ) -> Result<()> {
+        println!("Actor signature verification");
         let debit = &signed_debit.debit;
         let credit = &signed_credit.credit;
         let debit_bytes = match bincode::serialize(&debit) {
@@ -296,19 +298,32 @@ impl WalletReplica {
             Err(_) => return Err(Error::NetworkOther("Could not serialise credit".into())),
             Ok(bytes) => bytes,
         };
+
         let valid_debit = signed_debit
             .sender()
             .verify(&signed_debit.actor_signature, debit_bytes)
             .is_ok();
+
+        println!("Debit is valid?: {:?}", valid_debit);
         let valid_credit = signed_debit
             .sender()
             .verify(&signed_debit.actor_signature, credit_bytes)
             .is_ok();
+        println!("Credit is valid?: {:?}", valid_debit);
 
-        if valid_debit && valid_credit && credit.id() == &debit.credit_id()? {
-            Ok(())
+        // Ignore sig validation w/ simulated payouts
+        if cfg!(feature = "simulated-payouts") {
+            if credit.id() == &debit.credit_id()? {
+                Ok(())
+            } else {
+                Err(Error::InvalidSignature)
+            }
         } else {
-            Err(Error::InvalidSignature)
+            if valid_debit && valid_credit && credit.id() == &debit.credit_id()? {
+                Ok(())
+            } else {
+                Err(Error::InvalidSignature)
+            }
         }
     }
 
