@@ -10,7 +10,7 @@ use super::{
     wallet::{Wallet, WalletSnapshot},
     Outcome, TernaryResult,
 };
-use log::{debug, trace};
+use log::debug;
 #[cfg(feature = "simulated-payouts")]
 use sn_data_types::Credit;
 use sn_data_types::{
@@ -307,23 +307,14 @@ impl WalletReplica {
         println!("Debit is valid?: {:?}", valid_debit);
         let valid_credit = signed_debit
             .sender()
-            .verify(&signed_debit.actor_signature, credit_bytes)
+            .verify(&signed_credit.actor_signature, credit_bytes)
             .is_ok();
         println!("Credit is valid?: {:?}", valid_debit);
 
-        // Ignore sig validation w/ simulated payouts
-        if cfg!(feature = "simulated-payouts") {
-            if credit.id() == &debit.credit_id()? {
-                Ok(())
-            } else {
-                Err(Error::InvalidSignature)
-            }
+        if valid_debit && valid_credit && credit.id() == &debit.credit_id()? {
+            Ok(())
         } else {
-            if valid_debit && valid_credit && credit.id() == &debit.credit_id()? {
-                Ok(())
-            } else {
-                Err(Error::InvalidSignature)
-            }
+            Err(Error::InvalidSignature)
         }
     }
 
