@@ -178,7 +178,9 @@ impl WalletReplica {
             ));
         } else if self.wallet.id() != debit.sender() {
             return Outcome::rejected(Error::NoSuchSender);
-        } else if debit.id.counter != (self.pending_debit + 1) {
+        } else if self.pending_debit == 0 && debit.id.counter != 0 {
+            return Outcome::rejected(Error::from("out of order msg, actor's counter should be 0"));
+        } else if self.pending_debit > 0 && debit.id.counter != (self.pending_debit + 1) {
             return Outcome::rejected(Error::from(format!(
                 "out of order msg, provided count: {:?}, previous count: {:?}",
                 debit.id.counter, self.pending_debit
