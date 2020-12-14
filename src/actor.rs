@@ -66,7 +66,11 @@ impl<V: ReplicaValidator> Actor<V> {
     /// If it wants to execute some logic for verifying that the remote replicas are in fact part of the system,
     /// before accepting credits, it then implements that in the replica_validator.
     pub fn new(keypair: Arc<Keypair>, replicas: PublicKeySet, replica_validator: V) -> Actor<V> {
-        let id = keypair.public_key();
+        let id = match keypair.as_ref() {
+            Keypair::Ed25519(pair) => PublicKey::Ed25519(pair.public),
+            Keypair::Bls(pair) => PublicKey::Bls(pair.public),
+            Keypair::BlsShare(share) => PublicKey::Bls(share.public_key_set.public_key()),
+        };
         Actor {
             id,
             keypair,
