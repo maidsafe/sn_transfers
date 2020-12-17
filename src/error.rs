@@ -14,19 +14,15 @@ pub enum Error {
     /// Missing Replica Group
     #[error("ReplicaGroup is missing")]
     MissingReplicaGroup,
-
     /// Sender and receiver are the same
     #[error("Sender and recipient are the same")]
     SameSenderAndRecipient,
-
     /// A debit is awaiting completion. A new debit cannot be started.
     #[error("Current pending debit has not been completed")]
     DebitPending,
-
     /// The provided PublicKey does not correlate with any key in the section chain history.
     #[error("PublicKey provided by the transfer was never a part of the section chain.")]
     SectionKeyNeverExisted,
-
     /// The proposed debit has already been seen, or is not the next expected debit
     #[error("Debit already proposed or out of order")]
     DebitProposed,
@@ -48,11 +44,9 @@ pub enum Error {
     /// Transer is not for this actor
     #[error("Transfer not expected for this actor {0:?}")]
     NoSetForTransferId(Dot<PublicKey>),
-
     /// Proposed operation is not the next in sequence. The debit op should be current actor count + 1
     #[error("Operation out of order: debit's counter is '{0}', current actor counter is '{1}'")]
     OperationOutOfOrder(u64, u64),
-
     /// This account has not seen any debits yet. Sent debit should be 0 but was not.
     #[error("Operation out of order debit counter should be 0")]
     ShouldBeInitialOperation,
@@ -65,7 +59,6 @@ pub enum Error {
     /// The validation has already been received
     #[error("Validation already received")]
     ValidatedAlready,
-
     /// Debit is not from this wallet
     #[error("Debit is not from wallet {0}. Debit: {1:?}")]
     DebitDoesNotBelong(PublicKey, Debit),
@@ -82,22 +75,21 @@ pub enum Error {
     // TODO: clarify this...
     #[error("Unexpected outcome")]
     UnexpectedOutcome,
-
     /// Wallet not found
     #[error("Wallet not found locally. The following debit was the cause: {0:?}")]
     WalletNotFound(Debit),
     /// Signature shares are insufficient for BLS aggregation
     #[error("Could not aggregate with given signature shares")]
     CannotAggregate,
-
     /// Signature is not valid
     #[error("Signature is not valid")]
     InvalidSignature,
-
     /// Operation is not valid
     #[error("Operation is not valid")]
     InvalidOperation,
-
+    /// Owner is not valid
+    #[error("Owner is not valid")]
+    InvalidOwner,
     /// Insufficient coins.
     #[error("Insufficient balance to complete this operation")]
     InsufficientBalance,
@@ -107,15 +99,12 @@ pub enum Error {
     /// Inexistent recipient balance. Currently only thrown during network genesis
     #[error("No such recipient key balance")]
     NoSuchRecipient,
-
-    /// Coin balance already exists.
+    /// Balance key already exists.
     #[error("Key already exists")]
     KeyExists,
-
     /// Other sn_data_types errors
     #[error(transparent)]
     NetworkDataError(#[from] DtError),
-
     /// Serialisation
     #[error("Serialisation error. {0}")]
     Serialisation(String),
