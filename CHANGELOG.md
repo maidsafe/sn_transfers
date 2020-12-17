@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.2.5](https://github.com/maidsafe/sn_transfers/compare/v0.2.4...v0.2.5) (2020-12-17)
+
+
+### Bug Fixes
+
+* align transfer-split and actor model changes ([3a0ed37](https://github.com/maidsafe/sn_transfers/commit/3a0ed37c080eadb2a1dc8f205ee3a7817f87a68a))
+* don't start new wallet w/ sync ([a1c19cc](https://github.com/maidsafe/sn_transfers/commit/a1c19cca6991709ed2026017b4a7d22c36361ea6))
+* ignore sig validation for simulated payouts ([554e89d](https://github.com/maidsafe/sn_transfers/commit/554e89d6bf595b6f7ef4054b04354216a226a834))
+* use master pubkey as id for multisig wallet ([2efe1f2](https://github.com/maidsafe/sn_transfers/commit/2efe1f2f393673cb755d622673f31af096a8c8b0))
+* wrap replica counter in option ([e5a624a](https://github.com/maidsafe/sn_transfers/commit/e5a624a769afa64caca3019919be08f5f9fc156e))
+* **validation:** add case zero ([0efd75e](https://github.com/maidsafe/sn_transfers/commit/0efd75e8849d5bb40b54da446a222c564211d11e))
+* verify correct signature for credit ([53c6b85](https://github.com/maidsafe/sn_transfers/commit/53c6b85158693f8c997d424998a0ec4ba34396b7))
+
 ### [0.2.4](https://github.com/maidsafe/sn_transfers/compare/v0.2.3...v0.2.4) (2020-11-24)
 
 
