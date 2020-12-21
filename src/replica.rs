@@ -202,9 +202,9 @@ impl Replica {
         }
         match self.pending_debits.get(&debit.sender()) {
             None => {
-                if debit.id.counter != 0 {
+                if debit.id.counter != 1 {
                     return Outcome::rejected(Error::from(
-                        "out of order msg, actor's counter should be 0",
+                        "out of order msg, actor's counter should be 1",
                     ));
                 }
             }

@@ -10,7 +10,7 @@ use super::{
     wallet::{Wallet, WalletSnapshot},
     Outcome, TernaryResult,
 };
-use log::debug;
+use log::{debug, trace};
 #[cfg(feature = "simulated-payouts")]
 use sn_data_types::Credit;
 use sn_data_types::{
@@ -178,8 +178,8 @@ impl WalletReplica {
             ));
         } else if self.wallet.id() != debit.sender() {
             return Outcome::rejected(Error::NoSuchSender);
-        } else if self.pending_debit.is_none() && debit.id.counter != 0 {
-            return Outcome::rejected(Error::from("out of order msg, actor's counter should be 0"));
+        } else if self.pending_debit.is_none() && debit.id.counter != 1 {
+            return Outcome::rejected(Error::from("out of order msg, actor's counter should be 1"));
         } else if let Some(counter) = self.pending_debit {
             if debit.id.counter != (counter + 1) {
                 return Outcome::rejected(Error::from(format!(
@@ -227,11 +227,16 @@ impl WalletReplica {
         credit_proof: &CreditAgreementProof,
         past_key: F,
     ) -> Outcome<()> {
+        trace!("Transfer wallet receiving propagated: {:?}", credit_proof);
         // Always verify signature first! (as to not leak any information).
         self.verify_propagated_proof(credit_proof, past_key)?;
         if self.wallet.contains(&credit_proof.id()) {
             Outcome::no_change()
         } else {
+            trace!(
+                "wallet did not contain proof w/ id: {:?}",
+                credit_proof.id()
+            );
             Outcome::success(())
         }
     }

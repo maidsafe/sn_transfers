@@ -77,7 +77,7 @@ impl<V: ReplicaValidator> Actor<V> {
             replicas,
             replica_validator,
             wallet: Wallet::new(id),
-            next_expected_debit: 0,
+            next_expected_debit: 1,
             accumulating_validations: Default::default(),
         }
     }
@@ -96,7 +96,7 @@ impl<V: ReplicaValidator> Actor<V> {
             replicas,
             replica_validator,
             wallet,
-            next_expected_debit: 0,
+            next_expected_debit: 1,
             accumulating_validations: Default::default(),
         }
     }

@@ -69,6 +69,11 @@ impl Wallet {
 
     /// Query for next version.
     pub fn next_debit(&self) -> u64 {
+        self.debit_version + 1
+    }
+
+    /// Query for next version.
+    pub fn current_debit(&self) -> u64 {
         self.debit_version
     }
 
@@ -210,7 +215,7 @@ mod test {
 
         // Assert
         assert_eq!(Some(wallet.balance()), balance.checked_add(balance));
-        assert_eq!(wallet.next_debit(), 0);
+        assert_eq!(wallet.current_debit(), 0);
         Ok(())
     }
 
@@ -236,7 +241,8 @@ mod test {
 
         // Assert
         assert_eq!(wallet.balance(), Money::zero());
-        assert_eq!(wallet.next_debit(), 1);
+        assert_eq!(wallet.current_debit(), 1);
+        assert_eq!(wallet.next_debit(), 2);
         Ok(())
     }
 
