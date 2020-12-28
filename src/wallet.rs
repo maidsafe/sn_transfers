@@ -6,8 +6,9 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
+use crate::{Error, Result};
 use log::debug;
-use sn_data_types::{Credit, CreditId, Debit, Error, Money, PublicKey, Result};
+use sn_data_types::{Credit, CreditId, Debit, Money, PublicKey};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
@@ -88,20 +89,12 @@ impl Wallet {
         if self.id == debit.id.actor {
             match self.balance.checked_sub(debit.amount) {
                 Some(amount) => self.balance = amount,
-                None => {
-                    return Err(Error::Unexpected(format!(
-                        "overflow when subtracting! Balance: {}, debit: {}",
-                        self.balance, debit.amount
-                    )))
-                }
+                None => return Err(Error::SubtractionOverflow(debit.amount, self.balance)),
             }
             self.debit_version += 1;
             Ok(())
         } else {
-            Err(Error::from(format!(
-                "Debit does not belong to this wallet({:?}): debit: {:?}",
-                self.id, debit
-            )))
+            Err(Error::DebitDoesNotBelong(self.id, debit))
         }
     }
 
@@ -111,20 +104,12 @@ impl Wallet {
         if self.id == credit.recipient() {
             match self.balance.checked_add(credit.amount) {
                 Some(amount) => self.balance = amount,
-                None => {
-                    return Err(Error::Unexpected(format!(
-                        "overflow when adding! Balance: {}, debit: {}",
-                        self.balance, credit.amount
-                    )))
-                }
+                None => return Err(Error::AdditionOverflow(self.balance, credit.amount)),
             }
             let _ = self.credit_ids.insert(credit.id);
             Ok(())
         } else {
-            Err(Error::from(format!(
-                "Credit does not belong to this wallet({:?}): credit: {:?}",
-                self.id, credit
-            )))
+            Err(Error::CreditDoesNotBelong(self.id, credit))
         }
     }
 
@@ -136,18 +121,10 @@ impl Wallet {
         if self.id == credit.recipient() {
             match self.balance.checked_add(credit.amount) {
                 Some(amount) => self.balance = amount,
-                None => {
-                    return Err(Error::Unexpected(format!(
-                        "overflow when adding! Balance: {}, debit: {}",
-                        self.balance, credit.amount
-                    )))
-                }
+                None => return Err(Error::AdditionOverflow(self.balance, credit.amount)),
             }
         } else {
-            return Err(Error::Unexpected(format!(
-                "Credit does not belong to this wallet({:?}): credit: {:?}",
-                self.id, credit
-            )));
+            return Err(Error::CreditDoesNotBelong(self.id, credit));
         }
         Ok(())
     }
@@ -160,19 +137,11 @@ impl Wallet {
         if self.id == debit.id.actor {
             match self.balance.checked_sub(debit.amount) {
                 Some(amount) => self.balance = amount,
-                None => {
-                    return Err(Error::Unexpected(format!(
-                        "overflow when subtracting! Balance: {}, debit: {}",
-                        self.balance, debit.amount
-                    )))
-                }
+                None => return Err(Error::SubtractionOverflow(self.balance, debit.amount)),
             }
             self.debit_version += 1;
         } else {
-            return Err(Error::Unexpected(format!(
-                "Debit does not belong to this wallet({:?}): debit: {:?}",
-                self.id, debit
-            )));
+            return Err(Error::DebitDoesNotBelong(self.id, debit));
         }
         Ok(())
     }

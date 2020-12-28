@@ -6,9 +6,10 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use super::{Outcome, TernaryResult};
+use super::{Error, Outcome, TernaryResult};
 use sn_data_types::{
-    CreditAgreementProof, Error, SignatureShare, SignedCredit, SignedDebit, SignedTransfer,
+    CreditAgreementProof, Error as DtError, SignatureShare, SignedCredit, SignedDebit,
+    SignedTransfer,
 };
 use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKeyShare};
 
@@ -75,13 +76,15 @@ impl ReplicaSigning {
                 return Outcome::success((rds, rcs));
             }
         }
-        Outcome::rejected(Error::InvalidSignature)
+        Outcome::rejected(Error::NetworkDataError(DtError::InvalidSignature))
     }
 
     ///
     pub fn sign_validated_debit(&self, debit: &SignedDebit) -> Outcome<SignatureShare> {
         match bincode::serialize(debit) {
-            Err(_) => Err(Error::NetworkOther("Could not serialise debit".into())),
+            Err(_) => Err(Error::NetworkDataError(DtError::NetworkOther(
+                "Could not serialise debit".into(),
+            ))),
             Ok(data) => Outcome::success(SignatureShare {
                 index: self.key_index,
                 share: self.secret_key.sign(data),
@@ -92,7 +95,9 @@ impl ReplicaSigning {
     ///
     pub fn sign_validated_credit(&self, credit: &SignedCredit) -> Outcome<SignatureShare> {
         match bincode::serialize(credit) {
-            Err(_) => Err(Error::NetworkOther("Could not serialise credit".into())),
+            Err(_) => Err(Error::NetworkDataError(DtError::NetworkOther(
+                "Could not serialise credit".into(),
+            ))),
             Ok(data) => Outcome::success(SignatureShare {
                 index: self.key_index,
                 share: self.secret_key.sign(data),
@@ -103,7 +108,9 @@ impl ReplicaSigning {
     ///
     pub fn sign_credit_proof(&self, proof: &CreditAgreementProof) -> Outcome<SignatureShare> {
         match bincode::serialize(proof) {
-            Err(_) => Err(Error::NetworkOther("Could not serialise proof".into())),
+            Err(_) => Err(Error::NetworkDataError(DtError::NetworkOther(
+                "Could not serialise proof".into(),
+            ))),
             Ok(data) => Outcome::success(SignatureShare {
                 index: self.key_index,
                 share: self.secret_key.sign(data),
