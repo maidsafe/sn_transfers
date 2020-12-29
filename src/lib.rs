@@ -26,6 +26,7 @@
 )]
 
 mod actor;
+mod error;
 mod genesis;
 mod replica;
 mod replica_signing;
@@ -33,17 +34,19 @@ mod wallet;
 mod wallet_replica;
 
 pub use self::{
-    actor::Actor as TransferActor, genesis::get_genesis, replica::Replica as TransferReplica,
-    replica_signing::ReplicaSigning, wallet::Wallet, wallet_replica::WalletReplica,
+    actor::Actor as TransferActor, error::Error, genesis::get_genesis,
+    replica::Replica as TransferReplica, replica_signing::ReplicaSigning, wallet::Wallet,
+    wallet_replica::WalletReplica,
 };
 
 use serde::{Deserialize, Serialize};
 use sn_data_types::{
-    CreditAgreementProof, CreditId, DebitId, Error, Money, PublicKey, ReplicaEvent, Result,
+    CreditAgreementProof, CreditId, DebitId, Error as DtError, Money, PublicKey, ReplicaEvent,
     SignedCredit, SignedDebit, TransferAgreementProof, TransferValidated,
 };
 use std::collections::HashSet;
 
+type Result<T> = std::result::Result<T, Error>;
 type Outcome<T> = Result<Option<T>>;
 
 trait TernaryResult<T> {
@@ -177,15 +180,16 @@ pub struct TransferRegistrationSent {
 #[allow(unused)]
 mod test {
     use crate::{
-        actor::Actor, genesis, replica::Replica, ActorEvent, Error, ReplicaEvent, ReplicaValidator,
-        TransferInitiated, Wallet,
+        actor::Actor, genesis, replica::Replica, ActorEvent, DtError, ReplicaEvent,
+        ReplicaValidator, TransferInitiated, Wallet,
     };
+    use crate::{Error, Result};
     use crdts::{
         quickcheck::{quickcheck, TestResult},
         Dot,
     };
     use sn_data_types::{
-        Credit, CreditAgreementProof, CreditId, Debit, Keypair, Money, PublicKey, Result, Transfer,
+        Credit, CreditAgreementProof, CreditId, Debit, Keypair, Money, PublicKey, Transfer,
         TransferAgreementProof,
     };
     use std::collections::{HashMap, HashSet};
@@ -233,11 +237,11 @@ mod test {
         for replica in &mut groups.remove(0).replicas {
             let result = replica
                 .genesis(&credit_proof, || previous_key)?
-                .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+                .ok_or(Error::UnexpectedOutcome)?;
             replica.apply(ReplicaEvent::TransferPropagated(result))?;
             let balance = replica
                 .balance(&credit_proof.recipient())
-                .ok_or(Error::NoSuchBalance)?;
+                .ok_or(Error::NetworkDataError(DtError::NoSuchBalance))?;
             println!("Balance: {}", balance);
             assert_eq!(credit_proof.amount(), balance);
         }
@@ -307,19 +311,17 @@ mod test {
         let wallet_configs =
             hashmap![sender_index => sender_balance, recipient_index => recipient_balance];
         let (_, mut actors) = get_network(group_count, replica_count, wallet_configs);
-        let mut sender = actors
-            .remove(&sender_index)
-            .ok_or_else(|| Error::Unexpected("Sender missing from actors".to_string()))?;
+        let mut sender = actors.remove(&sender_index).ok_or(Error::MissingSender)?;
         let mut recipient = actors
             .remove(&recipient_index)
-            .ok_or_else(|| Error::Unexpected("Recipient missing from actors".to_string()))?;
+            .ok_or(Error::MissingRecipient)?;
 
         // --- Act ---
         // 1. Init transfer at Sender Actor.
         let transfer = init_transfer(&mut sender, recipient.actor.id())?;
         // 2. Validate at Sender Replicas.
-        let debit_proof = validate_at_sender_replicas(transfer, &mut sender)?
-            .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+        let debit_proof =
+            validate_at_sender_replicas(transfer, &mut sender)?.ok_or(Error::UnexpectedOutcome)?;
         // 3. Register at Sender Replicas.
         register_at_debiting_replicas(&debit_proof, &mut sender.replica_group)?;
         // 4. Propagate to Recipient Replicas.
@@ -354,7 +356,7 @@ mod test {
         let transfer = sender
             .actor
             .transfer(sender.actor.balance(), to, "asdf".to_string())?
-            .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+            .ok_or(Error::UnexpectedOutcome)?;
 
         sender
             .actor
@@ -374,12 +376,12 @@ mod test {
                     transfer.signed_debit.clone(),
                     transfer.signed_credit.clone(),
                 )?
-                .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+                .ok_or(Error::UnexpectedOutcome)?;
             replica.apply(ReplicaEvent::TransferValidated(validated.clone()))?;
             let validation_received = sender
                 .actor
                 .receive(validated)?
-                .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+                .ok_or(Error::UnexpectedOutcome)?;
             sender.actor.apply(ActorEvent::TransferValidationReceived(
                 validation_received.clone(),
             ))?;
@@ -387,7 +389,7 @@ mod test {
                 let registered = sender
                     .actor
                     .register(proof.clone())?
-                    .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+                    .ok_or(Error::UnexpectedOutcome)?;
                 sender
                     .actor
                     .apply(ActorEvent::TransferRegistrationSent(registered))?;
@@ -405,7 +407,7 @@ mod test {
         for replica in &mut replica_group.replicas {
             let registered = replica
                 .register(debit_proof, || true)?
-                .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+                .ok_or(Error::UnexpectedOutcome)?;
             replica.apply(ReplicaEvent::TransferRegistered(registered))?;
         }
         Ok(())
@@ -422,7 +424,7 @@ mod test {
             .map(|replica| {
                 let propagated = replica
                     .receive_propagated(&credit_proof, || None)?
-                    .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+                    .ok_or(Error::UnexpectedOutcome)?;
                 replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()))?;
                 Ok(ReplicaEvent::TransferPropagated(propagated))
             })
@@ -440,7 +442,7 @@ mod test {
         let transfers = recipient
             .actor
             .synch(wallet.balance, wallet.debit_version, wallet.credit_ids)?
-            .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+            .ok_or(Error::UnexpectedOutcome)?;
         recipient
             .actor
             .apply(ActorEvent::TransfersSynched(transfers))
@@ -536,7 +538,7 @@ mod test {
         replica_groups: &mut Vec<ReplicaGroup>,
     ) -> Result<TestActor> {
         let replica_group = find_group(wallet.replica_group, replica_groups)
-            .ok_or_else(|| Error::Unexpected("ReplicaGroup is missing".to_string()))?
+            .ok_or(Error::MissingReplicaGroup)?
             .clone();
 
         let actor = Actor::from_snapshot(

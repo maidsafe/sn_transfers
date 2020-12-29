@@ -9,15 +9,15 @@
 use crate::wallet::WalletSnapshot;
 
 use super::{
-    wallet::Wallet, ActorEvent, Outcome, ReceivedCredit, ReplicaValidator, TernaryResult,
-    TransferInitiated, TransferRegistrationSent, TransferValidated, TransferValidationReceived,
-    TransfersSynched,
+    wallet::Wallet, ActorEvent, Error, Outcome, ReceivedCredit, ReplicaValidator, Result,
+    TernaryResult, TransferInitiated, TransferRegistrationSent, TransferValidated,
+    TransferValidationReceived, TransfersSynched,
 };
 use crdts::Dot;
 use itertools::Itertools;
 use log::debug;
 use sn_data_types::{
-    Credit, CreditId, Debit, DebitId, Error, Keypair, Money, PublicKey, ReplicaEvent, Result,
+    Credit, CreditId, Debit, DebitId, Error as DtError, Keypair, Money, PublicKey, ReplicaEvent,
     SignatureShare, SignedCredit, SignedDebit, TransferAgreementProof,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -132,26 +132,24 @@ impl<V: ReplicaValidator> Actor<V> {
         msg: String,
     ) -> Outcome<TransferInitiated> {
         if recipient == self.id {
-            return Outcome::rejected(Error::from("Sender and recipient are the same"));
+            return Outcome::rejected(Error::SameSenderAndRecipient);
         }
 
         let id = Dot::new(self.id, self.wallet.next_debit());
 
         // ensures one debit is completed at a time
         if self.next_expected_debit != self.wallet.next_debit() {
-            return Outcome::rejected(Error::from("Current pending debit has not been completed"));
+            return Outcome::rejected(Error::DebitPending);
         }
         if self.next_expected_debit != id.counter {
-            return Outcome::rejected(Error::from("Debit already proposed or out of order"));
+            return Outcome::rejected(Error::DebitProposed);
         }
         if amount > self.balance() {
-            return Outcome::rejected(Error::InsufficientBalance);
+            return Outcome::rejected(Error::NetworkDataError(DtError::InsufficientBalance));
         }
 
         if amount == Money::from_nano(0) {
-            return Outcome::rejected(Error::Unexpected(
-                "Cannot send zero-value transfers".to_string(),
-            ));
+            return Outcome::rejected(Error::ZeroValueTransfer);
         }
 
         let debit = Debit { id, amount };
@@ -163,14 +161,22 @@ impl<V: ReplicaValidator> Actor<V> {
         };
 
         let signed_debit = match bincode::serialize(&debit) {
-            Err(_) => return Err(Error::NetworkOther("Could not serialise debit".into())),
+            Err(_) => {
+                return Err(Error::NetworkDataError(DtError::NetworkOther(
+                    "Could not serialise debit".into(),
+                )))
+            }
             Ok(data) => SignedDebit {
                 debit,
                 actor_signature: self.keypair.sign(&data),
             },
         };
         let signed_credit = match bincode::serialize(&credit) {
-            Err(_) => return Err(Error::NetworkOther("Could not serialise credit".into())),
+            Err(_) => {
+                return Err(Error::NetworkDataError(DtError::NetworkOther(
+                    "Could not serialise credit".into(),
+                )))
+            }
             Ok(data) => SignedCredit {
                 credit,
                 actor_signature: self.keypair.sign(&data),
@@ -187,7 +193,7 @@ impl<V: ReplicaValidator> Actor<V> {
     pub fn receive(&self, validation: TransferValidated) -> Outcome<TransferValidationReceived> {
         // Always verify signature first! (as to not leak any information).
         if self.verify(&validation).is_err() {
-            return Err(Error::InvalidSignature);
+            return Err(Error::NetworkDataError(DtError::InvalidSignature));
         }
 
         let signed_debit = &validation.signed_debit;
@@ -195,38 +201,33 @@ impl<V: ReplicaValidator> Actor<V> {
 
         // check if credit and debit correspond
         if signed_credit.id() != &signed_debit.credit_id()? {
-            return Err(Error::from("Credit does not correspond to debit."));
+            return Err(Error::CreditDebitIdMismatch);
         }
         // check if validation was initiated by this actor
         if self.id != signed_debit.sender() {
-            return Err(Error::from("Validation not intended for this actor"));
+            return Err(Error::WrongValidationActor);
         }
         // check if expected this validation
         if self.next_expected_debit != signed_debit.id().counter + 1 {
-            return Err(Error::from("Out of order validation"));
+            return Err(Error::OperationOutOfOrder(
+                signed_debit.id().counter,
+                self.next_expected_debit,
+            ));
         }
         // check if already received
         if let Some(map) = self.accumulating_validations.get(&validation.id()) {
             if map.contains_key(&validation.replica_debit_sig.index) {
-                return Err(Error::from("Already received validation"));
+                return Err(Error::ValidatedAlready);
             }
         } else {
-            return Err(Error::Unexpected(format!(
-                "No set found for DebitId: {:?}",
-                validation.id()
-            )));
+            return Err(Error::NoSetForDebitId(validation.id()));
         }
 
         // TODO: Cover scenario where replica keys might have changed during an ongoing transfer.
         let map = self
             .accumulating_validations
             .get(&validation.id())
-            .ok_or_else(|| {
-                Error::Unexpected(format!(
-                    "No set found for TransferID: {:?}",
-                    validation.id()
-                ))
-            })?;
+            .ok_or_else(|| Error::NoSetForTransferId(validation.id()))?;
 
         let mut proof = None;
 
@@ -237,11 +238,19 @@ impl<V: ReplicaValidator> Actor<V> {
             map.len() + 1 > self.replicas.threshold() && self.replicas == validation.replicas;
         if majority {
             let debit_bytes = match bincode::serialize(&signed_debit) {
-                Err(_) => return Err(Error::Unexpected("Serialization error".to_string())),
+                Err(_) => {
+                    return Err(Error::NetworkDataError(DtError::Bincode(
+                        "Serialization Error".to_string(),
+                    )))
+                }
                 Ok(data) => data,
             };
             let credit_bytes = match bincode::serialize(&signed_credit) {
-                Err(_) => return Err(Error::Unexpected("Serialization error".to_string())),
+                Err(_) => {
+                    return Err(Error::NetworkDataError(DtError::Bincode(
+                        "Serialization Error".to_string(),
+                    )))
+                }
                 Ok(data) => data,
             };
 
@@ -264,20 +273,12 @@ impl<V: ReplicaValidator> Actor<V> {
             let debit_sig = self
                 .replicas
                 .combine_signatures(&debit_sig_shares)
-                .map_err(|_| {
-                    Error::Unexpected(
-                        "Could not aggregate with the given SignatureShares".to_string(),
-                    )
-                })?;
+                .map_err(|_| Error::CannotAggregate)?;
             // Combine shares to produce the main signature.
             let credit_sig = self
                 .replicas
                 .combine_signatures(&credit_sig_shares)
-                .map_err(|_| {
-                    Error::Unexpected(
-                        "Could not aggregate with the given SignatureShares".to_string(),
-                    )
-                })?;
+                .map_err(|_| Error::CannotAggregate)?;
 
             let valid_debit = self.replicas.public_key().verify(&debit_sig, debit_bytes);
             let valid_credit = self.replicas.public_key().verify(&credit_sig, credit_bytes);
@@ -306,12 +307,15 @@ impl<V: ReplicaValidator> Actor<V> {
     ) -> Outcome<TransferRegistrationSent> {
         // Always verify signature first! (as to not leak any information).
         if self.verify_transfer_proof(&transfer_proof).is_err() {
-            return Err(Error::InvalidSignature);
+            return Err(Error::NetworkDataError(DtError::InvalidSignature));
         }
         if self.wallet.next_debit() == transfer_proof.id().counter {
             Outcome::success(TransferRegistrationSent { transfer_proof })
         } else {
-            Err(Error::from("Non-sequential operation"))
+            Err(Error::OperationOutOfOrder(
+                transfer_proof.id().counter,
+                self.wallet.next_debit(),
+            ))
         }
     }
 
@@ -364,7 +368,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 snapshot.credit_ids,
             )
         } else {
-            Err(Error::from("No credits or debits found to sync to actor"))
+            Err(Error::NothingToSync)
         }
     }
 
@@ -450,10 +454,7 @@ impl<V: ReplicaValidator> Actor<V> {
                     Some(map) => {
                         let _ = map.insert(e.validation.replica_debit_sig.index, e.validation);
                     }
-                    None => return Err(Error::Unexpected(
-                        "Could not find the expected transfer id among accumulating validations!"
-                            .to_string(),
-                    )),
+                    None => return Err(Error::PendingTransferNotFound),
                 }
                 Ok(())
             }
@@ -499,7 +500,7 @@ impl<V: ReplicaValidator> Actor<V> {
         if valid_debit && valid_credit {
             Ok(())
         } else {
-            Err(Error::InvalidSignature)
+            Err(Error::NetworkDataError(DtError::InvalidSignature))
         }
     }
 
@@ -514,7 +515,9 @@ impl<V: ReplicaValidator> Actor<V> {
         let sig_share = &replica_signature.share;
         let share_index = replica_signature.index;
         match bincode::serialize(&item) {
-            Err(_) => Err(Error::NetworkOther("Could not serialise item".into())),
+            Err(_) => Err(Error::NetworkDataError(DtError::NetworkOther(
+                "Could not serialise item".into(),
+            ))),
             Ok(data) => {
                 let verified = replicas
                     .public_key_share(share_index)
@@ -522,7 +525,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 if verified {
                     Ok(())
                 } else {
-                    Err(Error::InvalidSignature)
+                    Err(Error::NetworkDataError(DtError::InvalidSignature))
                 }
             }
         }
@@ -539,7 +542,11 @@ impl<V: ReplicaValidator> Actor<V> {
 
         // Check that the proof corresponds to a/the public key set of our Replicas.
         let valid_debit = match bincode::serialize(&proof.signed_debit) {
-            Err(_) => return Err(Error::NetworkOther("Could not serialise debit".into())),
+            Err(_) => {
+                return Err(Error::NetworkDataError(DtError::NetworkOther(
+                    "Could not serialise debit".into(),
+                )))
+            }
             Ok(data) => {
                 let public_key = sn_data_types::PublicKey::Bls(self.replicas.public_key());
                 public_key.verify(&proof.debit_sig, &data).is_ok()
@@ -547,7 +554,11 @@ impl<V: ReplicaValidator> Actor<V> {
         };
 
         let valid_credit = match bincode::serialize(&proof.signed_credit) {
-            Err(_) => return Err(Error::NetworkOther("Could not serialise credit".into())),
+            Err(_) => {
+                return Err(Error::NetworkDataError(DtError::NetworkOther(
+                    "Could not serialise credit".into(),
+                )))
+            }
             Ok(data) => {
                 let public_key = sn_data_types::PublicKey::Bls(self.replicas.public_key());
                 public_key.verify(&proof.credit_sig, &data).is_ok()
@@ -557,7 +568,7 @@ impl<V: ReplicaValidator> Actor<V> {
         if valid_debit && valid_credit {
             Ok(())
         } else {
-            Err(Error::InvalidSignature)
+            Err(Error::NetworkDataError(DtError::InvalidSignature))
         }
     }
 
@@ -568,16 +579,19 @@ impl<V: ReplicaValidator> Actor<V> {
             .replica_validator
             .is_valid(credit.crediting_replica_keys)
         {
-            return Err(Error::InvalidSignature);
+            return Err(Error::NetworkDataError(DtError::InvalidSignature));
         }
         let proof = &credit.credit_proof;
 
         // Check that the proof corresponds to a/the public key set of our Replicas.
         match bincode::serialize(&proof.signed_credit) {
-            Err(_) => Err(Error::NetworkOther("Could not serialise credit".into())),
+            Err(_) => Err(Error::NetworkDataError(DtError::NetworkOther(
+                "Could not serialise credit".into(),
+            ))),
             Ok(data) => credit
                 .crediting_replica_keys
-                .verify(&proof.debiting_replicas_sig, &data),
+                .verify(&proof.debiting_replicas_sig, &data)
+                .map_err(Error::NetworkDataError),
         }
     }
 
@@ -588,7 +602,11 @@ impl<V: ReplicaValidator> Actor<V> {
         signed_credit: &SignedCredit,
     ) -> Result<()> {
         let valid_debit = match bincode::serialize(&signed_debit.debit) {
-            Err(_) => return Err(Error::NetworkOther("Could not serialise transfer".into())),
+            Err(_) => {
+                return Err(Error::NetworkDataError(DtError::NetworkOther(
+                    "Could not serialise transfer".into(),
+                )))
+            }
             Ok(data) => self
                 .keypair
                 .public_key()
@@ -597,7 +615,11 @@ impl<V: ReplicaValidator> Actor<V> {
         };
 
         let valid_credit = match bincode::serialize(&signed_credit.credit) {
-            Err(_) => return Err(Error::NetworkOther("Could not serialise transfer".into())),
+            Err(_) => {
+                return Err(Error::NetworkDataError(DtError::NetworkOther(
+                    "Could not serialise transfer".into(),
+                )))
+            }
             Ok(data) => self
                 .keypair
                 .public_key()
@@ -608,7 +630,7 @@ impl<V: ReplicaValidator> Actor<V> {
         if valid_debit && valid_credit && signed_credit.id() == &signed_debit.credit_id()? {
             Ok(())
         } else {
-            Err(Error::InvalidSignature)
+            Err(Error::NetworkDataError(DtError::InvalidSignature))
         }
     }
 }
@@ -616,12 +638,13 @@ impl<V: ReplicaValidator> Actor<V> {
 #[cfg(test)]
 mod test {
     use super::{
-        Actor, ActorEvent, ReplicaValidator, TransferInitiated, TransferRegistrationSent, Wallet,
+        Actor, ActorEvent, Error, ReplicaValidator, Result, TransferInitiated,
+        TransferRegistrationSent, Wallet,
     };
     use crdts::Dot;
     use serde::Serialize;
     use sn_data_types::{
-        Credit, Debit, Error, Keypair, Money, PublicKey, Result, Signature, SignatureShare,
+        Credit, Debit, Error as DtError, Keypair, Money, PublicKey, Signature, SignatureShare,
         TransferAgreementProof, TransferValidated,
     };
     use std::collections::BTreeMap;
@@ -662,15 +685,17 @@ mod test {
     }
 
     #[test]
-    fn cannot_initiate_0_value_transfers() -> Result<()> {
+    fn cannot_initiate_0_value_transfers() -> anyhow::Result<()> {
         let (actor, _sk_set) = get_actor_and_replicas_sk_set(10)?;
 
         match actor.transfer(Money::from_nano(0), get_random_pk(), "asfd".to_string()) {
-            Ok(_) => Err(Error::from("Should not be able to send 0 value transfers")),
+            Ok(_) => Err(anyhow::anyhow!(
+                "Should not be able to send 0 value transfers",
+            )),
             Err(error) => {
                 assert!(error
                     .to_string()
-                    .contains("Cannot send zero-value transfers"));
+                    .contains("Transfer amount must be greater than zero"));
                 Ok(())
             }
         }
@@ -723,7 +748,7 @@ mod test {
         for i in 0..7 {
             let transfer_validation = actor
                 .receive(validations[i].clone())?
-                .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+                .ok_or(Error::UnexpectedOutcome)?;
 
             if i < 1
             // threshold is 1
@@ -743,14 +768,16 @@ mod test {
     fn get_debit(actor: &Actor<Validator>) -> Result<TransferInitiated> {
         let event = actor
             .transfer(Money::from_nano(10), get_random_pk(), "asdf".to_string())?
-            .ok_or_else(|| Error::Unexpected("Unexpected outcome".to_string()))?;
+            .ok_or(Error::UnexpectedOutcome)?;
         Ok(event)
     }
 
     fn try_serialize<T: Serialize>(value: T) -> Result<Vec<u8>> {
         match bincode::serialize(&value) {
             Ok(res) => Ok(res),
-            _ => Err(Error::from("serialization failed")),
+            _ => Err(Error::NetworkDataError(DtError::Bincode(
+                "Serialisation error".to_string(),
+            ))),
         }
     }
 
@@ -825,11 +852,11 @@ mod test {
         // Combine them to produce the main signature.
         let debit_sig = match pk_set.combine_signatures(&debit_sig_shares) {
             Ok(s) => s,
-            _ => return Err(Error::from("invalid signature")),
+            _ => return Err(Error::NetworkDataError(DtError::InvalidSignature)),
         };
         let credit_sig = match pk_set.combine_signatures(&credit_sig_shares) {
             Ok(s) => s,
-            _ => return Err(Error::from("invalid signature")),
+            _ => return Err(Error::NetworkDataError(DtError::InvalidSignature)),
         };
 
         // Validate the main signature. If the shares were valid, this can't fail.
