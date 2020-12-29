@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.2.6](https://github.com/maidsafe/sn_transfers/compare/v0.2.5...v0.2.6) (2020-12-29)
+
+
+### Features
+
+* use thiserror and create transfers error lib ([dfa7f4f](https://github.com/maidsafe/sn_transfers/commit/dfa7f4fd8dcc85ad21a6547aadf9235ae547be0c))
+
 ### [0.2.5](https://github.com/maidsafe/sn_transfers/compare/v0.2.4...v0.2.5) (2020-12-17)
 
 
