@@ -239,7 +239,7 @@ impl<V: ReplicaValidator> Actor<V> {
         if majority {
             let debit_bytes = match bincode::serialize(&signed_debit) {
                 Err(_) => {
-                    return Err(Error::NetworkDataError(DtError::Bincode(
+                    return Err(Error::NetworkDataError(DtError::Serialisation(
                         "Serialization Error".to_string(),
                     )))
                 }
@@ -247,7 +247,7 @@ impl<V: ReplicaValidator> Actor<V> {
             };
             let credit_bytes = match bincode::serialize(&signed_credit) {
                 Err(_) => {
-                    return Err(Error::NetworkDataError(DtError::Bincode(
+                    return Err(Error::NetworkDataError(DtError::Serialisation(
                         "Serialization Error".to_string(),
                     )))
                 }
@@ -775,7 +775,7 @@ mod test {
     fn try_serialize<T: Serialize>(value: T) -> Result<Vec<u8>> {
         match bincode::serialize(&value) {
             Ok(res) => Ok(res),
-            _ => Err(Error::NetworkDataError(DtError::Bincode(
+            _ => Err(Error::NetworkDataError(DtError::Serialisation(
                 "Serialisation error".to_string(),
             ))),
         }
