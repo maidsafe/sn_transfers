@@ -15,8 +15,8 @@ use log::debug;
 #[cfg(feature = "simulated-payouts")]
 use sn_data_types::Credit;
 use sn_data_types::{
-    CreditAgreementProof, Debit, Error as DtError, KnownGroupAdded, Money, PublicKey, ReplicaEvent,
-    SignedCredit, SignedDebit, TransferAgreementProof, TransferRegistered,
+    CreditAgreementProof, Debit, KnownGroupAdded, Money, PublicKey, ReplicaEvent, SignedCredit,
+    SignedDebit, TransferAgreementProof, TransferRegistered,
 };
 use std::collections::HashSet;
 use threshold_crypto::{PublicKeySet, PublicKeyShare};
@@ -122,7 +122,7 @@ impl WalletReplica {
     ) -> Outcome<()> {
         // Genesis must be the first credit.
         if self.balance() != Money::zero() || self.pending_debit.is_some() {
-            return Err(Error::NetworkDataError(DtError::InvalidOperation));
+            return Err(Error::InvalidOperation);
         }
         self.receive_propagated(credit_proof, past_key)
     }
@@ -130,7 +130,7 @@ impl WalletReplica {
     /// Adds a PK set for a a new group that we learn of.
     pub fn add_known_group(&self, group: PublicKeySet) -> Outcome<KnownGroupAdded> {
         if self.other_groups.contains(&group) {
-            return Err(Error::NetworkDataError(DtError::DataExists));
+            return Err(Error::KeyExists);
         }
         Outcome::success(KnownGroupAdded { group })
     }
@@ -166,7 +166,7 @@ impl WalletReplica {
             .verify_actor_signature(&signed_debit, &signed_credit)
             .is_err()
         {
-            return Outcome::rejected(Error::NetworkDataError(DtError::InvalidSignature));
+            return Outcome::rejected(Error::InvalidSignature);
         } else if debit.sender() == credit.recipient() {
             return Outcome::rejected(Error::SameSenderAndRecipient);
         } else if credit.id() != &debit.credit_id()? {
@@ -176,7 +176,7 @@ impl WalletReplica {
         } else if debit.amount() == Money::zero() {
             return Outcome::rejected(Error::ZeroValueTransfer);
         } else if self.wallet.id() != debit.sender() {
-            return Outcome::rejected(Error::NetworkDataError(DtError::NoSuchSender));
+            return Outcome::rejected(Error::NoSuchSender);
         } else if self.pending_debit.is_none() && debit.id.counter != 0 {
             return Outcome::rejected(Error::ShouldBeInitialOperation);
         } else if let Some(counter) = self.pending_debit {
@@ -184,7 +184,7 @@ impl WalletReplica {
                 return Outcome::rejected(Error::OperationOutOfOrder(debit.id.counter, counter));
             }
         } else if debit.amount() > self.balance() {
-            return Outcome::rejected(Error::NetworkDataError(DtError::InsufficientBalance));
+            return Outcome::rejected(Error::InsufficientBalance);
         }
 
         Outcome::success(())
@@ -203,7 +203,7 @@ impl WalletReplica {
             .verify_registered_proof(transfer_proof, past_key)
             .is_err()
         {
-            return Err(Error::NetworkDataError(DtError::InvalidSignature));
+            return Err(Error::InvalidSignature);
         }
 
         let debit = &transfer_proof.signed_debit.debit;
@@ -212,7 +212,7 @@ impl WalletReplica {
                 transfer_proof: transfer_proof.clone(),
             })
         } else {
-            Outcome::rejected(Error::NetworkDataError(DtError::InvalidOperation))
+            Outcome::rejected(Error::InvalidOperation)
             // from this place this code won't happen, but history validates the transfer is actually debits from it's owner).
         }
     }
@@ -292,19 +292,11 @@ impl WalletReplica {
         let debit = &signed_debit.debit;
         let credit = &signed_credit.credit;
         let debit_bytes = match bincode::serialize(&debit) {
-            Err(_) => {
-                return Err(Error::NetworkDataError(DtError::NetworkOther(
-                    "Could not serialise debit".into(),
-                )))
-            }
+            Err(_) => return Err(Error::Serialisation("Could not serialise debit".into())),
             Ok(bytes) => bytes,
         };
         let credit_bytes = match bincode::serialize(&credit) {
-            Err(_) => {
-                return Err(Error::NetworkDataError(DtError::NetworkOther(
-                    "Could not serialise credit".into(),
-                )))
-            }
+            Err(_) => return Err(Error::Serialisation("Could not serialise credit".into())),
             Ok(bytes) => bytes,
         };
 
@@ -323,7 +315,7 @@ impl WalletReplica {
         if valid_debit && valid_credit && credit.id() == &debit.credit_id()? {
             Ok(())
         } else {
-            Err(Error::NetworkDataError(DtError::InvalidSignature))
+            Err(Error::InvalidSignature)
         }
     }
 
@@ -340,19 +332,11 @@ impl WalletReplica {
         // Check that the proof corresponds to a public key set of our peers.
         let debit_bytes = match bincode::serialize(&proof.signed_debit) {
             Ok(bytes) => bytes,
-            Err(_) => {
-                return Err(Error::NetworkDataError(DtError::NetworkOther(
-                    "Could not serialise transfer".into(),
-                )))
-            }
+            Err(_) => return Err(Error::Serialisation("Could not serialise transfer".into())),
         };
         let credit_bytes = match bincode::serialize(&proof.signed_credit) {
             Ok(bytes) => bytes,
-            Err(_) => {
-                return Err(Error::NetworkDataError(DtError::NetworkOther(
-                    "Could not serialise transfer".into(),
-                )))
-            }
+            Err(_) => return Err(Error::Serialisation("Could not serialise transfer".into())),
         };
         // Check if proof is signed by our peers.
         let public_key = sn_data_types::PublicKey::Bls(self.peer_replicas.public_key());
@@ -370,7 +354,7 @@ impl WalletReplica {
         }
 
         // If it's not signed with our peers' public key, we won't consider it valid.
-        Err(Error::NetworkDataError(DtError::InvalidSignature))
+        Err(Error::InvalidSignature)
     }
 
     /// Verify that this is a valid _propagated_
@@ -382,9 +366,7 @@ impl WalletReplica {
     ) -> Result<()> {
         // Check that the proof corresponds to a public key set of some Replicas.
         match bincode::serialize(&proof.signed_credit) {
-            Err(_) => Err(Error::NetworkDataError(DtError::NetworkOther(
-                "Could not serialise transfer".into(),
-            ))),
+            Err(_) => Err(Error::Serialisation("Could not serialise transfer".into())),
             Ok(credit_bytes) => {
                 // Check if it is from our group.
                 let our_key = sn_data_types::PublicKey::Bls(self.peer_replicas.public_key());
@@ -415,7 +397,7 @@ impl WalletReplica {
                     }
                 }
                 // If we don't know the public key this was signed with, we won't consider it valid.
-                Err(Error::NetworkDataError(DtError::InvalidSignature))
+                Err(Error::InvalidSignature)
             }
         }
     }

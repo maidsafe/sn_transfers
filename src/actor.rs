@@ -17,8 +17,8 @@ use crdts::Dot;
 use itertools::Itertools;
 use log::debug;
 use sn_data_types::{
-    Credit, CreditId, Debit, DebitId, Error as DtError, Keypair, Money, PublicKey, ReplicaEvent,
-    SignatureShare, SignedCredit, SignedDebit, TransferAgreementProof,
+    Credit, CreditId, Debit, DebitId, Keypair, Money, PublicKey, ReplicaEvent, SignatureShare,
+    SignedCredit, SignedDebit, TransferAgreementProof,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -145,7 +145,7 @@ impl<V: ReplicaValidator> Actor<V> {
             return Outcome::rejected(Error::DebitProposed);
         }
         if amount > self.balance() {
-            return Outcome::rejected(Error::NetworkDataError(DtError::InsufficientBalance));
+            return Outcome::rejected(Error::InsufficientBalance);
         }
 
         if amount == Money::from_nano(0) {
@@ -161,22 +161,14 @@ impl<V: ReplicaValidator> Actor<V> {
         };
 
         let signed_debit = match bincode::serialize(&debit) {
-            Err(_) => {
-                return Err(Error::NetworkDataError(DtError::NetworkOther(
-                    "Could not serialise debit".into(),
-                )))
-            }
+            Err(_) => return Err(Error::Serialisation("Could not serialise debit".into())),
             Ok(data) => SignedDebit {
                 debit,
                 actor_signature: self.keypair.sign(&data),
             },
         };
         let signed_credit = match bincode::serialize(&credit) {
-            Err(_) => {
-                return Err(Error::NetworkDataError(DtError::NetworkOther(
-                    "Could not serialise credit".into(),
-                )))
-            }
+            Err(_) => return Err(Error::Serialisation("Could not serialise credit".into())),
             Ok(data) => SignedCredit {
                 credit,
                 actor_signature: self.keypair.sign(&data),
@@ -193,7 +185,7 @@ impl<V: ReplicaValidator> Actor<V> {
     pub fn receive(&self, validation: TransferValidated) -> Outcome<TransferValidationReceived> {
         // Always verify signature first! (as to not leak any information).
         if self.verify(&validation).is_err() {
-            return Err(Error::NetworkDataError(DtError::InvalidSignature));
+            return Err(Error::InvalidSignature);
         }
 
         let signed_debit = &validation.signed_debit;
@@ -238,19 +230,11 @@ impl<V: ReplicaValidator> Actor<V> {
             map.len() + 1 > self.replicas.threshold() && self.replicas == validation.replicas;
         if majority {
             let debit_bytes = match bincode::serialize(&signed_debit) {
-                Err(_) => {
-                    return Err(Error::NetworkDataError(DtError::Serialisation(
-                        "Serialization Error".to_string(),
-                    )))
-                }
+                Err(_) => return Err(Error::Serialisation("Serialization Error".to_string())),
                 Ok(data) => data,
             };
             let credit_bytes = match bincode::serialize(&signed_credit) {
-                Err(_) => {
-                    return Err(Error::NetworkDataError(DtError::Serialisation(
-                        "Serialization Error".to_string(),
-                    )))
-                }
+                Err(_) => return Err(Error::Serialisation("Serialization Error".to_string())),
                 Ok(data) => data,
             };
 
@@ -307,7 +291,7 @@ impl<V: ReplicaValidator> Actor<V> {
     ) -> Outcome<TransferRegistrationSent> {
         // Always verify signature first! (as to not leak any information).
         if self.verify_transfer_proof(&transfer_proof).is_err() {
-            return Err(Error::NetworkDataError(DtError::InvalidSignature));
+            return Err(Error::InvalidSignature);
         }
         if self.wallet.next_debit() == transfer_proof.id().counter {
             Outcome::success(TransferRegistrationSent { transfer_proof })
@@ -500,7 +484,7 @@ impl<V: ReplicaValidator> Actor<V> {
         if valid_debit && valid_credit {
             Ok(())
         } else {
-            Err(Error::NetworkDataError(DtError::InvalidSignature))
+            Err(Error::InvalidSignature)
         }
     }
 
@@ -515,9 +499,7 @@ impl<V: ReplicaValidator> Actor<V> {
         let sig_share = &replica_signature.share;
         let share_index = replica_signature.index;
         match bincode::serialize(&item) {
-            Err(_) => Err(Error::NetworkDataError(DtError::NetworkOther(
-                "Could not serialise item".into(),
-            ))),
+            Err(_) => Err(Error::Serialisation("Could not serialise item".into())),
             Ok(data) => {
                 let verified = replicas
                     .public_key_share(share_index)
@@ -525,7 +507,7 @@ impl<V: ReplicaValidator> Actor<V> {
                 if verified {
                     Ok(())
                 } else {
-                    Err(Error::NetworkDataError(DtError::InvalidSignature))
+                    Err(Error::InvalidSignature)
                 }
             }
         }
@@ -542,11 +524,7 @@ impl<V: ReplicaValidator> Actor<V> {
 
         // Check that the proof corresponds to a/the public key set of our Replicas.
         let valid_debit = match bincode::serialize(&proof.signed_debit) {
-            Err(_) => {
-                return Err(Error::NetworkDataError(DtError::NetworkOther(
-                    "Could not serialise debit".into(),
-                )))
-            }
+            Err(_) => return Err(Error::Serialisation("Could not serialise debit".into())),
             Ok(data) => {
                 let public_key = sn_data_types::PublicKey::Bls(self.replicas.public_key());
                 public_key.verify(&proof.debit_sig, &data).is_ok()
@@ -554,11 +532,7 @@ impl<V: ReplicaValidator> Actor<V> {
         };
 
         let valid_credit = match bincode::serialize(&proof.signed_credit) {
-            Err(_) => {
-                return Err(Error::NetworkDataError(DtError::NetworkOther(
-                    "Could not serialise credit".into(),
-                )))
-            }
+            Err(_) => return Err(Error::Serialisation("Could not serialise credit".into())),
             Ok(data) => {
                 let public_key = sn_data_types::PublicKey::Bls(self.replicas.public_key());
                 public_key.verify(&proof.credit_sig, &data).is_ok()
@@ -568,7 +542,7 @@ impl<V: ReplicaValidator> Actor<V> {
         if valid_debit && valid_credit {
             Ok(())
         } else {
-            Err(Error::NetworkDataError(DtError::InvalidSignature))
+            Err(Error::InvalidSignature)
         }
     }
 
@@ -579,15 +553,13 @@ impl<V: ReplicaValidator> Actor<V> {
             .replica_validator
             .is_valid(credit.crediting_replica_keys)
         {
-            return Err(Error::NetworkDataError(DtError::InvalidSignature));
+            return Err(Error::InvalidSignature);
         }
         let proof = &credit.credit_proof;
 
         // Check that the proof corresponds to a/the public key set of our Replicas.
         match bincode::serialize(&proof.signed_credit) {
-            Err(_) => Err(Error::NetworkDataError(DtError::NetworkOther(
-                "Could not serialise credit".into(),
-            ))),
+            Err(_) => Err(Error::Serialisation("Could not serialise credit".into())),
             Ok(data) => credit
                 .crediting_replica_keys
                 .verify(&proof.debiting_replicas_sig, &data)
@@ -602,11 +574,7 @@ impl<V: ReplicaValidator> Actor<V> {
         signed_credit: &SignedCredit,
     ) -> Result<()> {
         let valid_debit = match bincode::serialize(&signed_debit.debit) {
-            Err(_) => {
-                return Err(Error::NetworkDataError(DtError::NetworkOther(
-                    "Could not serialise transfer".into(),
-                )))
-            }
+            Err(_) => return Err(Error::Serialisation("Could not serialise transfer".into())),
             Ok(data) => self
                 .keypair
                 .public_key()
@@ -615,11 +583,7 @@ impl<V: ReplicaValidator> Actor<V> {
         };
 
         let valid_credit = match bincode::serialize(&signed_credit.credit) {
-            Err(_) => {
-                return Err(Error::NetworkDataError(DtError::NetworkOther(
-                    "Could not serialise transfer".into(),
-                )))
-            }
+            Err(_) => return Err(Error::Serialisation("Could not serialise transfer".into())),
             Ok(data) => self
                 .keypair
                 .public_key()
@@ -630,7 +594,7 @@ impl<V: ReplicaValidator> Actor<V> {
         if valid_debit && valid_credit && signed_credit.id() == &signed_debit.credit_id()? {
             Ok(())
         } else {
-            Err(Error::NetworkDataError(DtError::InvalidSignature))
+            Err(Error::InvalidSignature)
         }
     }
 }
@@ -644,7 +608,7 @@ mod test {
     use crdts::Dot;
     use serde::Serialize;
     use sn_data_types::{
-        Credit, Debit, Error as DtError, Keypair, Money, PublicKey, Signature, SignatureShare,
+        Credit, Debit, Keypair, Money, PublicKey, Signature, SignatureShare,
         TransferAgreementProof, TransferValidated,
     };
     use std::collections::BTreeMap;
@@ -775,9 +739,7 @@ mod test {
     fn try_serialize<T: Serialize>(value: T) -> Result<Vec<u8>> {
         match bincode::serialize(&value) {
             Ok(res) => Ok(res),
-            _ => Err(Error::NetworkDataError(DtError::Serialisation(
-                "Serialisation error".to_string(),
-            ))),
+            _ => Err(Error::Serialisation("Serialisation error".to_string())),
         }
     }
 
@@ -852,11 +814,11 @@ mod test {
         // Combine them to produce the main signature.
         let debit_sig = match pk_set.combine_signatures(&debit_sig_shares) {
             Ok(s) => s,
-            _ => return Err(Error::NetworkDataError(DtError::InvalidSignature)),
+            _ => return Err(Error::InvalidSignature),
         };
         let credit_sig = match pk_set.combine_signatures(&credit_sig_shares) {
             Ok(s) => s,
-            _ => return Err(Error::NetworkDataError(DtError::InvalidSignature)),
+            _ => return Err(Error::InvalidSignature),
         };
 
         // Validate the main signature. If the shares were valid, this can't fail.

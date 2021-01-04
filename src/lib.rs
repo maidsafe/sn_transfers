@@ -41,8 +41,8 @@ pub use self::{
 
 use serde::{Deserialize, Serialize};
 use sn_data_types::{
-    CreditAgreementProof, CreditId, DebitId, Error as DtError, Money, PublicKey, ReplicaEvent,
-    SignedCredit, SignedDebit, TransferAgreementProof, TransferValidated,
+    CreditAgreementProof, CreditId, DebitId, Money, PublicKey, ReplicaEvent, SignedCredit,
+    SignedDebit, TransferAgreementProof, TransferValidated,
 };
 use std::collections::HashSet;
 
@@ -180,10 +180,9 @@ pub struct TransferRegistrationSent {
 #[allow(unused)]
 mod test {
     use crate::{
-        actor::Actor, genesis, replica::Replica, ActorEvent, DtError, ReplicaEvent,
-        ReplicaValidator, TransferInitiated, Wallet,
+        actor::Actor, genesis, replica::Replica, ActorEvent, Error, ReplicaEvent, ReplicaValidator,
+        Result, TransferInitiated, Wallet,
     };
-    use crate::{Error, Result};
     use crdts::{
         quickcheck::{quickcheck, TestResult},
         Dot,
@@ -241,7 +240,7 @@ mod test {
             replica.apply(ReplicaEvent::TransferPropagated(result))?;
             let balance = replica
                 .balance(&credit_proof.recipient())
-                .ok_or(Error::NetworkDataError(DtError::NoSuchBalance))?;
+                .ok_or(Error::NoSuchRecipient)?;
             println!("Balance: {}", balance);
             assert_eq!(credit_proof.amount(), balance);
         }

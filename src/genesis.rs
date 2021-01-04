@@ -7,9 +7,7 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use crate::{Error, Result};
-use sn_data_types::{
-    Credit, CreditAgreementProof, Error as DtError, Money, PublicKey, SignedCredit,
-};
+use sn_data_types::{Credit, CreditAgreementProof, Money, PublicKey, SignedCredit};
 use std::collections::BTreeMap;
 use threshold_crypto::SecretKeySet;
 
@@ -36,7 +34,7 @@ pub fn get_genesis(balance: u64, id: PublicKey) -> Result<CreditAgreementProof> 
     };
 
     let serialised_credit = bincode::serialize(&credit)
-        .map_err(|e| Error::NetworkDataError(DtError::NetworkOther(e.to_string())))?;
+        .map_err(|_| Error::Serialisation("Could not serialise credit".to_string()))?;
     let credit_sig_share = secret_key.sign(serialised_credit);
     let mut credit_sig_shares = BTreeMap::new();
     let _ = credit_sig_shares.insert(0, credit_sig_share);
@@ -44,7 +42,7 @@ pub fn get_genesis(balance: u64, id: PublicKey) -> Result<CreditAgreementProof> 
     let actor_signature = sn_data_types::Signature::Bls(
         peer_replicas
             .combine_signatures(&credit_sig_shares)
-            .map_err(|e| Error::NetworkDataError(DtError::NetworkOther(e.to_string())))?,
+            .map_err(|_| Error::CannotAggregate)?,
     );
 
     let signed_credit = SignedCredit {
@@ -54,7 +52,7 @@ pub fn get_genesis(balance: u64, id: PublicKey) -> Result<CreditAgreementProof> 
     let debiting_replicas_sig = sn_data_types::Signature::Bls(
         peer_replicas
             .combine_signatures(&credit_sig_shares)
-            .map_err(|e| Error::NetworkDataError(DtError::NetworkOther(e.to_string())))?,
+            .map_err(|_| Error::CannotAggregate)?,
     );
 
     Ok(CreditAgreementProof {

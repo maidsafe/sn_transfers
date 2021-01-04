@@ -23,6 +23,10 @@ pub enum Error {
     #[error("Current pending debit has not been completed")]
     DebitPending,
 
+    /// A debit is awaiting completion. A new debit cannot be started.
+    #[error("PublicKey provided by the transfer was never a part of the section chain.")]
+    SectionKeyNeverExisted,
+
     /// The proposed debit has already been seen, or is not the next expected debit
     #[error("Debit already proposed or out of order")]
     DebitProposed,
@@ -35,9 +39,6 @@ pub enum Error {
     /// This is not the correct actor to validate
     #[error("Validation not intended for this actor")]
     WrongValidationActor,
-    /// Validation is out of order
-    #[error("Validation out of order")]
-    ValidationOutOfOrder,
     /// No pending transfer could be found awaiting accumulation
     #[error("Could not find the expected transfer id among accumulating validations")]
     PendingTransferNotFound,
@@ -88,7 +89,34 @@ pub enum Error {
     /// Signature shares are insufficient for BLS aggregation
     #[error("Could not aggregate with given signature shares")]
     CannotAggregate,
+
+    /// Signature is not valid
+    #[error("Signature is not valid")]
+    InvalidSignature,
+
+    /// Operation is not valid
+    #[error("Operation is not valid")]
+    InvalidOperation,
+
+    /// Insufficient coins.
+    #[error("Insufficient balance to complete this operation")]
+    InsufficientBalance,
+    /// Inexistent sender balance.
+    #[error("No such sender key balance")]
+    NoSuchSender,
+    /// Inexistent recipient balance. Currently only thrown during network genesis
+    #[error("No such recipient key balance")]
+    NoSuchRecipient,
+
+    /// Coin balance already exists.
+    #[error("Key already exists")]
+    KeyExists,
+
     /// Other sn_data_types errors
     #[error(transparent)]
     NetworkDataError(#[from] DtError),
+
+    /// Serialisation
+    #[error("Serialisation error. {0}")]
+    Serialisation(String),
 }
