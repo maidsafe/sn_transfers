@@ -23,7 +23,7 @@ pub enum Error {
     #[error("Current pending debit has not been completed")]
     DebitPending,
 
-    /// A debit is awaiting completion. A new debit cannot be started.
+    /// The provided PublicKey does not correlate with any key in the section chain history.
     #[error("PublicKey provided by the transfer was never a part of the section chain.")]
     SectionKeyNeverExisted,
 
