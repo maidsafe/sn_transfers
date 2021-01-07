@@ -9,10 +9,11 @@
 use crate::{Error, Result};
 use sn_data_types::{Credit, CreditAgreementProof, Money, PublicKey, SignedCredit};
 use std::collections::BTreeMap;
-use threshold_crypto::SecretKeySet;
+use threshold_crypto::{PublicKeySet, SecretKeySet, SecretKeyShare};
 
 /// Produces a genesis balance for a new network.
-pub fn get_genesis(balance: u64, id: PublicKey) -> Result<CreditAgreementProof> {
+#[allow(unused)]
+pub fn get_random_genesis(balance: u64, id: PublicKey) -> Result<CreditAgreementProof> {
     let index = 0;
     let threshold = 0;
     // Nothing comes before genesis, it is a paradox
@@ -25,7 +26,16 @@ pub fn get_genesis(balance: u64, id: PublicKey) -> Result<CreditAgreementProof> 
     let bls_secret_key = SecretKeySet::random(threshold, &mut rng);
     let peer_replicas = bls_secret_key.public_keys();
     let secret_key = bls_secret_key.secret_key_share(index);
+    get_genesis(balance, id, peer_replicas, secret_key)
+}
 
+/// Produces a genesis balance for a new network.
+pub fn get_genesis(
+    balance: u64,
+    id: PublicKey,
+    peer_replicas: PublicKeySet,
+    secret_key: SecretKeyShare,
+) -> Result<CreditAgreementProof> {
     let credit = Credit {
         id: Default::default(),
         amount: Money::from_nano(balance),

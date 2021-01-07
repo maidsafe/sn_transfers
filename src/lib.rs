@@ -233,12 +233,18 @@ mod test {
 
     #[test]
     fn can_start_with_genesis() -> Result<()> {
-        let credit_proof = get_genesis()?;
-        let keys = setup_replica_group_keys(1, 3);
-        let mut groups = setup_replica_groups(keys, vec![]);
+        let group_count = 1;
+        let replica_count = 1;
+        let (genesis, credit_proof) = get_genesis(replica_count - 1)?;
+        //let genesis = setup_random_wallet(0, 0)?;
+        println!("Got genesis");
+        let keys = setup_replica_group_keys(group_count, replica_count as u8);
+        let recipient = &genesis.wallet.id().public_key();
+        let mut groups = setup_replica_groups(keys, vec![genesis]);
+        println!("Got groups");
         for replica in &mut groups.remove(0).replicas {
-            let past_key = Ok(PublicKey::Bls(credit_proof.replica_keys().public_key()));
-            let wallet_replica = match replica.wallets.get_mut(&credit_proof.recipient()) {
+            let past_key = Ok(PublicKey::Bls(replica.signing.replicas_pk_set().public_key()));
+            let wallet_replica = match replica.wallets.get_mut(recipient) {
                 Some(w) => w,
                 None => panic!("Failed the test; no such wallet."),
             };
@@ -246,11 +252,18 @@ mod test {
                 .genesis(&credit_proof, || past_key)?
                 .ok_or(Error::UnexpectedOutcome)?;
 
+            println!("Passed genesis");
+
             wallet_replica.apply(ReplicaEvent::TransferPropagated(
                 sn_data_types::TransferPropagated {
                     credit_proof: credit_proof.clone(),
-                    crediting_replica_keys: get_random_pk(),
-                    crediting_replica_sig: dummy_sig(),
+                    crediting_replica_keys: PublicKey::Bls(
+                        replica.signing.replicas_pk_set().public_key(),
+                    ),
+                    crediting_replica_sig: replica
+                        .signing
+                        .sign_credit_proof(&credit_proof)?
+                        .ok_or(Error::UnexpectedOutcome)?,
                 },
             ))?;
             let balance = wallet_replica.balance();
@@ -272,9 +285,11 @@ mod test {
 
     #[test]
     fn genesis_can_only_be_the_first() -> Result<()> {
-        let credit_proof = get_genesis()?;
+        let group_count = 1;
+        let replica_count = 1;
+        let (wallet, credit_proof) = get_genesis(replica_count - 1)?;
         let wallet_configs = hashmap![0 => 10];
-        let mut groups = get_network(1, 3, wallet_configs).0;
+        let (mut groups, _) = get_network(group_count, replica_count as u8, wallet, wallet_configs);
         for replica in &mut groups.remove(0).replicas {
             let past_key = Ok(PublicKey::Bls(credit_proof.replica_keys().public_key()));
             let wallet = match replica.wallets.get(&credit_proof.recipient()) {
@@ -336,7 +351,8 @@ mod test {
         let recipient_final = sender_balance + recipient_balance;
         let wallet_configs =
             hashmap![sender_index => sender_balance, recipient_index => recipient_balance];
-        let (_, mut actors) = get_network(group_count, replica_count, wallet_configs);
+        let (genesis, credit_proof) = get_genesis(replica_count as usize - 1)?;
+        let (_, mut actors) = get_network(group_count, replica_count, genesis, wallet_configs);
         let mut sender = actors.remove(&sender_index).ok_or(Error::MissingSender)?;
         let mut recipient = actors
             .remove(&recipient_index)
@@ -535,30 +551,49 @@ mod test {
     // ------------------------ Setup Helpers ---------------------------------
     // ------------------------------------------------------------------------
 
-    fn get_genesis() -> Result<CreditAgreementProof> {
+    /// gets an empty wallet and the genesis credit to be applied on it
+    fn get_genesis(threshold: usize) -> Result<(TestWallet, CreditAgreementProof)> {
         let balance = u32::MAX as u64 * 1_000_000_000;
         let mut rng = rand::thread_rng();
-        let threshold = 0;
+        //let threshold = 0;
         let bls_secret_key = SecretKeySet::random(threshold, &mut rng);
         let peer_replicas = bls_secret_key.public_keys();
         let id = PublicKey::Bls(peer_replicas.public_key());
-        genesis::get_genesis(balance, id)
+        let keypair = sn_data_types::Keypair::new_bls_share(
+            0,
+            bls_secret_key.secret_key_share(0),
+            peer_replicas.clone(),
+        );
+        let owner = WalletOwner::Multi(peer_replicas.clone());
+        let wallet = Wallet::new(owner);
+        Ok((
+            setup_wallet(0, 0, keypair, wallet)?,
+            genesis::get_genesis(
+                balance,
+                id,
+                peer_replicas,
+                bls_secret_key.secret_key_share(0),
+            )?,
+        ))
     }
 
     fn get_network(
         group_count: u8,
         replica_count: u8,
+        genesis: TestWallet,
         wallet_configs: HashMap<u8, u64>,
     ) -> (Vec<ReplicaGroup>, HashMap<u8, TestActor>) {
         let wallets: Vec<_> = wallet_configs
             .iter()
-            .filter_map(|(index, balance)| setup_wallet(*balance, *index).ok())
+            .filter_map(|(index, balance)| setup_random_wallet(*balance, *index).ok())
             .collect();
 
         let group_keys = setup_replica_group_keys(group_count, replica_count);
-        let mut replica_groups = setup_replica_groups(group_keys, wallets.clone());
+        let mut wallets_clones = wallets.clone();
+        let _ = wallets_clones.push(genesis.clone());
+        let mut replica_groups = setup_replica_groups(group_keys, wallets_clones);
 
-        let actors: HashMap<_, _> = wallets
+        let mut actors: HashMap<_, _> = wallets
             .iter()
             .map(|a| (a.replica_group, setup_actor(a.clone(), &mut replica_groups)))
             .filter_map(|(key, val)| {
@@ -570,6 +605,13 @@ mod test {
             })
             .collect();
 
+        let next_key = match actors.keys().max() {
+            Some(i) => i + 1,
+            None => 0,
+        };
+        if let Ok(actor) = setup_actor(genesis, &mut replica_groups) {
+            let _ = actors.insert(next_key, actor);
+        }
         assert_eq!(
             wallets.len(),
             actors.len(),
@@ -592,23 +634,34 @@ mod test {
         PublicKey::from(SecretKey::random().public_key())
     }
 
-    fn setup_wallet(balance: u64, replica_group: u8) -> Result<TestWallet> {
+    fn setup_random_wallet(balance: u64, replica_group: u8) -> Result<TestWallet> {
         let mut rng = rand::thread_rng();
         let keypair = Keypair::new_ed25519(&mut rng);
         let recipient = keypair.public_key();
         let owner = WalletOwner::Single(recipient);
         let mut wallet = Wallet::new(owner);
+        setup_wallet(balance, replica_group, keypair, wallet)
+    }
 
-        let amount = Money::from_nano(balance);
-        let sender = Dot::new(get_random_pk(), 0);
-        let debit = Debit { id: sender, amount };
-        let credit = Credit {
-            id: debit.credit_id()?,
-            recipient,
-            amount,
-            msg: "".to_string(),
-        };
-        let _ = wallet.apply_credit(credit);
+    fn setup_wallet(
+        balance: u64,
+        replica_group: u8,
+        keypair: Keypair,
+        wallet: Wallet,
+    ) -> Result<TestWallet> {
+        let mut wallet = wallet;
+        if balance > 0 {
+            let amount = Money::from_nano(balance);
+            let sender = Dot::new(get_random_pk(), 0);
+            let debit = Debit { id: sender, amount };
+            let credit = Credit {
+                id: debit.credit_id()?,
+                recipient: wallet.id().public_key(),
+                amount,
+                msg: "".to_string(),
+            };
+            let _ = wallet.apply_credit(credit)?;
+        }
 
         Ok(TestWallet {
             wallet,
@@ -646,7 +699,7 @@ mod test {
         let mut rng = rand::thread_rng();
         let mut groups = HashMap::new();
         for i in 0..group_count {
-            let threshold = (2 * replica_count / 3) - 1;
+            let threshold = std::cmp::max(1, 2 * replica_count / 3) - 1;
             let bls_secret_key = SecretKeySet::random(threshold as usize, &mut rng);
             let peers = bls_secret_key.public_keys();
             let mut shares = vec![];
