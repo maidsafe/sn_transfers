@@ -22,11 +22,19 @@ pub enum WalletOwner {
 }
 
 impl WalletOwner {
-    /// returns the owner public key
+    /// Returns the owner public key
     pub fn public_key(&self) -> PublicKey {
         match self {
             Self::Single(key) => *key,
             Self::Multi(key_set) => PublicKey::Bls(key_set.public_key()),
+        }
+    }
+
+    /// Tries to get the key set in case this is a Multi owner.
+    pub fn public_key_set(&self) -> Result<PublicKeySet> {
+        match self {
+            Self::Single(_) => Err(Error::InvalidOwner),
+            Self::Multi(key_set) => Ok(key_set.clone()),
         }
     }
 }
