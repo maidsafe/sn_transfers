@@ -1,4 +1,4 @@
-// Copyright 2020 MaidSafe.net limited.
+// Copyright 2021 MaidSafe.net limited.
 //
 // This SAFE Network Software is licensed to you under The General Public License (GPL), version 3.
 // Unless required by applicable law or agreed to in writing, the SAFE Network Software distributed
@@ -6,9 +6,10 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use super::{Error, Outcome, TernaryResult};
+use super::{Error, Outcome, Result, TernaryResult};
+use crate::genesis;
 use sn_data_types::{
-    CreditAgreementProof, SignatureShare, SignedCredit, SignedDebit, SignedTransfer,
+    CreditAgreementProof, PublicKey, SignatureShare, SignedCredit, SignedDebit, SignedTransfer,
 };
 use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKeyShare};
 
@@ -35,19 +36,13 @@ pub struct ReplicaSigning {
 
 impl ReplicaSigning {
     /// A new instance
-    pub fn new(
-        secret_key: SecretKeyShare,
-        key_index: usize,
-        peer_replicas: PublicKeySet,
-        //other_groups: HashSet<PublicKeySet>,
-    ) -> Self {
+    pub fn new(secret_key: SecretKeyShare, key_index: usize, peer_replicas: PublicKeySet) -> Self {
         let id = secret_key.public_key_share();
         Self {
             secret_key,
             id,
             key_index,
             peer_replicas,
-            //other_groups,
         }
     }
 
@@ -64,6 +59,17 @@ impl ReplicaSigning {
     /// ---------------------- Cmds -------------------------------------
     /// -----------------------------------------------------------------
 
+    ///
+    pub fn try_genesis(&self, balance: u64) -> Result<CreditAgreementProof> {
+        genesis::get_genesis(
+            balance,
+            PublicKey::Bls(self.peer_replicas.public_key()),
+            self.peer_replicas.clone(),
+            self.secret_key.clone(),
+        )
+    }
+
+    ///
     pub fn sign_transfer(
         &self,
         signed_transfer: &SignedTransfer,
