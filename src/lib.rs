@@ -243,7 +243,9 @@ mod test {
         let mut groups = setup_replica_groups(keys, vec![genesis]);
         println!("Got groups");
         for replica in &mut groups.remove(0).replicas {
-            let past_key = Ok(PublicKey::Bls(replica.signing.replicas_pk_set().public_key()));
+            let past_key = Ok(PublicKey::Bls(
+                replica.signing.replicas_pk_set().public_key(),
+            ));
             let wallet_replica = match replica.wallets.get_mut(recipient) {
                 Some(w) => w,
                 None => panic!("Failed the test; no such wallet."),
@@ -564,16 +566,11 @@ mod test {
             bls_secret_key.secret_key_share(0),
             peer_replicas.clone(),
         );
-        let owner = WalletOwner::Multi(peer_replicas.clone());
+        let owner = WalletOwner::Multi(peer_replicas);
         let wallet = Wallet::new(owner);
         Ok((
             setup_wallet(0, 0, keypair, wallet)?,
-            genesis::get_genesis(
-                balance,
-                id,
-                peer_replicas,
-                bls_secret_key.secret_key_share(0),
-            )?,
+            genesis::get_multi_genesis(balance, id, bls_secret_key)?,
         ))
     }
 
