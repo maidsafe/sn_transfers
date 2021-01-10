@@ -71,15 +71,18 @@ pub enum Error {
     #[error("Credit is not from wallet {0}. Credit: {1:?}")]
     CreditDoesNotBelong(PublicKey, Credit),
     /// Subtracting this transfer would cause an overlow
-    #[error("Overlow when subtracting {0} from balance of: {1}")]
+    #[error("Overflow when subtracting {0} from balance of: {1}")]
     SubtractionOverflow(Money, Money),
     /// Adding this transfer would cause an overflow
-    #[error("Overlow when adding balance {0} and credit of: {1}")]
+    #[error("Overflow when adding balance {0} and credit of: {1}")]
     AdditionOverflow(Money, Money),
     /// Unexpected outcome
     // TODO: clarify this...
     #[error("Unexpected outcome")]
     UnexpectedOutcome,
+    /// Unknown error
+    #[error("Unknown error: {0}")]
+    Unknown(String),
     /// Wallet not found
     #[error("Wallet not found locally. The following debit was the cause: {0:?}")]
     WalletNotFound(Debit),
