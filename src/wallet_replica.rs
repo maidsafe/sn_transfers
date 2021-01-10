@@ -435,14 +435,14 @@ impl WalletReplica {
         &self,
         signed_transfer: &SignedTransferShare,
     ) -> Outcome<TransferValidationProposed> {
-        let signed_debit = &signed_transfer.debit();
-        let signed_credit = &signed_transfer.credit();
+        let signed_debit = signed_transfer.debit();
+        let signed_credit = signed_transfer.credit();
         let debit = &signed_debit.debit;
         let credit = &signed_credit.credit;
 
         // Always verify signature first! (as to not leak any information).
-        if self.verify_actor_signature_share(signed_transfer).is_err() {
-            return Outcome::rejected(Error::InvalidSignature);
+        if let Err(e) = self.verify_actor_signature_share(signed_transfer) {
+            return Outcome::rejected(e);
         } else if debit.sender() == credit.recipient() {
             return Outcome::rejected(Error::SameSenderAndRecipient);
         } else if credit.id() != &debit.credit_id()? {
@@ -460,10 +460,13 @@ impl WalletReplica {
                 return Outcome::rejected(Error::OperationOutOfOrder(debit.id.counter, counter));
             }
         }
+        
+        debug!("Correct proposal.");
+        debug!("Accumulating transfer validation proposal..");
 
         self.accumulate(TransferValidationProposed {
-            signed_credit: signed_transfer.credit().to_owned(),
-            signed_debit: signed_transfer.debit().to_owned(),
+            signed_credit: signed_credit.to_owned(),
+            signed_debit: signed_debit.to_owned(),
             agreed_transfer: None,
         })
     }
@@ -502,6 +505,7 @@ impl WalletReplica {
         let majority = map.len() + 1 > actors.threshold() && self.id.public_key() == id.actor;
 
         if !majority {
+            debug!("No majority reached yet for proposal.");
             // No majority reached yet,
             // so the proposal does not have a populated agreement field.
             return Outcome::success(proposal);
@@ -575,16 +579,16 @@ impl WalletReplica {
         &self,
         signed_transfer_share: &SignedTransferShare,
     ) -> Result<()> {
-        println!("Actor signature share verification");
-        let signed_debit = &signed_transfer_share.debit();
-        let signed_credit = &signed_transfer_share.credit();
+        debug!("Actor signature share verification");
+        let signed_debit = signed_transfer_share.debit();
+        let signed_credit = signed_transfer_share.credit();
         let debit = &signed_debit.debit;
         let credit = &signed_credit.credit;
-        let debit_bytes = match bincode::serialize(&debit) {
+        let debit_bytes = match bincode::serialize(debit) {
             Err(_) => return Err(Error::Serialisation("Could not serialise debit".into())),
             Ok(bytes) => bytes,
         };
-        let credit_bytes = match bincode::serialize(&credit) {
+        let credit_bytes = match bincode::serialize(credit) {
             Err(_) => return Err(Error::Serialisation("Could not serialise credit".into())),
             Ok(bytes) => bytes,
         };
@@ -597,7 +601,7 @@ impl WalletReplica {
             )
             .is_ok();
 
-        println!("Debit is valid?: {:?}", valid_debit);
+        debug!("Debit is valid?: {:?}", valid_debit);
         let valid_credit = signed_transfer_share
             .sender()
             .verify(
@@ -605,12 +609,15 @@ impl WalletReplica {
                 credit_bytes,
             )
             .is_ok();
-        println!("Credit is valid?: {:?}", valid_debit);
+        debug!("Credit is valid?: {:?}", valid_debit);
 
-        if valid_debit && valid_credit && credit.id() == &debit.credit_id()? {
+        if credit.id() != &debit.credit_id()? {
+            return Err(Error::CreditDebitIdMismatch)
+        }
+        if valid_debit && valid_credit {
             Ok(())
         } else {
-            Err(Error::InvalidSignature)
+            Err(Error::Unknown(format!("InvalidSignature! valid_debit: {}, valid_credit: {}", valid_debit, valid_credit)))
         }
     }
 }

@@ -396,6 +396,7 @@ impl<V: ReplicaValidator> Actor<V> {
     }
 
     fn validate_credits(&self, events: &[ReplicaEvent]) -> Vec<ReceivedCredit> {
+        debug!("Validating credits..!");
         let valid_credits: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
@@ -596,19 +597,31 @@ impl<V: ReplicaValidator> Actor<V> {
     /// Verify that this is a valid ReceivedCredit.
     #[cfg(not(feature = "simulated-payouts"))]
     fn verify_credit_proof(&self, credit: &ReceivedCredit) -> Result<()> {
+        let proof = &credit.credit_proof;
+        let debiting_replicas_keys = PublicKey::Bls(proof
+            .debiting_replicas_keys
+            .public_key());
+
         if !self
             .replica_validator
             .is_valid(credit.crediting_replica_keys)
         {
-            return Err(Error::InvalidSignature);
+            return Err(Error::Unknown(format!("Unknown crediting replica keys: {}", credit.crediting_replica_keys)));
         }
-        let proof = &credit.credit_proof;
+        if !self
+            .replica_validator
+            .is_valid(debiting_replicas_keys)
+        {
+            return Err(Error::Unknown(format!("Unknown debiting replica keys: {}", debiting_replicas_keys)));
+        }
 
+        // TODO: verify crediting replica sig??
+
+        debug!("Verfying debiting_replicas_sig..!");
         // Check that the proof corresponds to a/the public key set of our Replicas.
         match bincode::serialize(&proof.signed_credit) {
             Err(_) => Err(Error::Serialisation("Could not serialise credit".into())),
-            Ok(data) => credit
-                .crediting_replica_keys
+            Ok(data) => debiting_replicas_keys
                 .verify(&proof.debiting_replicas_sig, &data)
                 .map_err(Error::NetworkDataError),
         }
