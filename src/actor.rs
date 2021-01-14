@@ -16,8 +16,8 @@ use crdts::Dot;
 use itertools::Itertools;
 use log::debug;
 use sn_data_types::{
-    Credit, CreditId, Debit, DebitId, Keypair, Money, PublicKey, ReplicaEvent, SignatureShare,
-    SignedCredit, SignedDebit, TransferAgreementProof, WalletInfo,
+    Credit, CreditId, Debit, DebitId, Keypair, Money, PublicKey, ReplicaEvent, Signature,
+    SignatureShare, SignedCredit, SignedDebit, TransferAgreementProof, WalletInfo,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -217,6 +217,7 @@ impl<V: ReplicaValidator> Actor<V> {
         if self.verify(&validation).is_err() {
             return Err(Error::InvalidSignature);
         }
+        debug!("Actor: Verified validation.");
 
         let signed_debit = &validation.signed_debit;
         let signed_credit = &validation.signed_credit;
@@ -397,17 +398,19 @@ impl<V: ReplicaValidator> Actor<V> {
 
     fn validate_credits(&self, events: &[ReplicaEvent]) -> Vec<ReceivedCredit> {
         debug!("Validating credits..!");
-        let valid_credits: Vec<_> = events
-            .iter()
-            .filter_map(|e| match e {
-                ReplicaEvent::TransferPropagated(e) => Some(e),
-                _ => None,
-            })
-            .unique_by(|e| e.id())
-            .map(|e| ReceivedCredit {
-                credit_proof: e.credit_proof.clone(),
-                crediting_replica_keys: e.crediting_replica_keys,
-            })
+        let valid_credits_1 = events.iter().filter_map(|e| match e {
+            ReplicaEvent::TransferPropagated(e) => Some(e.credit_proof.clone()),
+            _ => None,
+        });
+        let valid_credits_2 = events.iter().filter_map(|e| match e {
+            ReplicaEvent::TransferRegistered(e) => Some(e.transfer_proof.credit_proof()),
+            _ => None,
+        });
+
+        let valid_credits: Vec<_> = valid_credits_1
+            .chain(valid_credits_2)
+            .unique_by(|e| *e.id())
+            .map(|credit_proof| ReceivedCredit { credit_proof })
             .filter(|_credit| {
                 #[cfg(feature = "simulated-payouts")]
                 return true;
@@ -598,21 +601,19 @@ impl<V: ReplicaValidator> Actor<V> {
     #[cfg(not(feature = "simulated-payouts"))]
     fn verify_credit_proof(&self, credit: &ReceivedCredit) -> Result<()> {
         let proof = &credit.credit_proof;
-        let debiting_replicas_keys = PublicKey::Bls(proof
-            .debiting_replicas_keys
-            .public_key());
+        let debiting_replicas_keys = PublicKey::Bls(proof.debiting_replicas_keys.public_key());
 
-        if !self
-            .replica_validator
-            .is_valid(credit.crediting_replica_keys)
-        {
-            return Err(Error::Unknown(format!("Unknown crediting replica keys: {}", credit.crediting_replica_keys)));
-        }
-        if !self
-            .replica_validator
-            .is_valid(debiting_replicas_keys)
-        {
-            return Err(Error::Unknown(format!("Unknown debiting replica keys: {}", debiting_replicas_keys)));
+        // if !self
+        //     .replica_validator
+        //     .is_valid(credit.crediting_replica_keys)
+        // {
+        //     return Err(Error::Unknown(format!("Unknown crediting replica keys: {}", credit.crediting_replica_keys)));
+        // }
+        if !self.replica_validator.is_valid(debiting_replicas_keys) {
+            return Err(Error::Unknown(format!(
+                "Unknown debiting replica keys: {}",
+                debiting_replicas_keys
+            )));
         }
 
         // TODO: verify crediting replica sig??
@@ -633,28 +634,47 @@ impl<V: ReplicaValidator> Actor<V> {
         signed_debit: &SignedDebit,
         signed_credit: &SignedCredit,
     ) -> Result<()> {
+        debug!("Actor: Verifying is our transfer!");
         let valid_debit = match bincode::serialize(&signed_debit.debit) {
             Err(_) => return Err(Error::Serialisation("Could not serialise transfer".into())),
-            Ok(data) => self
-                .keypair
-                .public_key()
-                .verify(&signed_debit.actor_signature, data)
-                .is_ok(),
+            Ok(data) => self.validate(data, &signed_debit.actor_signature),
         };
-
         let valid_credit = match bincode::serialize(&signed_credit.credit) {
             Err(_) => return Err(Error::Serialisation("Could not serialise transfer".into())),
-            Ok(data) => self
-                .keypair
-                .public_key()
-                .verify(&signed_credit.actor_signature, data)
-                .is_ok(),
+            Ok(data) => self.validate(data, &signed_credit.actor_signature),
         };
 
-        if valid_debit && valid_credit && signed_credit.id() == &signed_debit.credit_id()? {
-            Ok(())
-        } else {
+        if !(valid_debit && valid_credit) {
+            debug!(
+                "Actor: Invalid debit sig? {}, invalid credit sig? {}",
+                valid_debit, valid_credit
+            );
             Err(Error::InvalidSignature)
+        } else if signed_credit.id() != &signed_debit.credit_id()? {
+            Err(Error::CreditDebitIdMismatch)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn validate(&self, data: Vec<u8>, sig: &Signature) -> bool {
+        match sig {
+            Signature::Bls(sig) => {
+                if let WalletOwner::Multi(set) = self.owner() {
+                    set.public_key().verify(&sig, data)
+                } else {
+                    false
+                }
+            }
+            ed @ Signature::Ed25519(_) => self.keypair.public_key().verify(ed, data).is_ok(),
+            Signature::BlsShare(share) => {
+                if let WalletOwner::Multi(set) = self.owner() {
+                    let pubkey_share = set.public_key_share(share.index);
+                    pubkey_share.verify(&share.share, data)
+                } else {
+                    false
+                }
+            }
         }
     }
 }

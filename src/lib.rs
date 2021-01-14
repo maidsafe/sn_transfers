@@ -76,8 +76,8 @@ impl<T> TernaryResult<T> for Outcome<T> {
 pub struct ReceivedCredit {
     /// The sender's aggregated Replica signatures of the credit.
     pub credit_proof: CreditAgreementProof,
-    /// The public key of the signing Replicas.
-    pub crediting_replica_keys: PublicKey,
+    ///// The public key of the signing Replicas.
+    //pub crediting_replica_keys: PublicKey,
 }
 
 impl ReceivedCredit {
@@ -220,6 +220,63 @@ mod test {
     // fn quickcheck_basic_transfer() {
     //     quickcheck(transfer_between_actors as fn(u64, u64, u8, u8, u8, u8) -> TestResult);
     // }
+
+    #[test]
+    fn synching() -> Result<()> {
+        let section_count = 1;
+        let replicas_per_section = 1;
+        let section_configs = vec![vec![]];
+        let Network {
+            genesis_credit,
+            mut sections,
+            mut actors,
+        } = setup_new_network(section_count, replicas_per_section, section_configs)?;
+
+        let genesis_key = genesis_credit.recipient();
+        let genesis_elder = &mut sections.remove(0).elders.remove(0);
+        let past_key = Ok(PublicKey::Bls(
+            genesis_elder.signing.replicas_pk_set().public_key(),
+        ));
+        let wallet_replica = match genesis_elder.replicas.get_mut(&genesis_key) {
+            Some(w) => w,
+            None => panic!("Failed the test; no such wallet."),
+        };
+        let _ = wallet_replica
+            .genesis(&genesis_credit, || past_key)?
+            .ok_or(Error::UnexpectedOutcome)?;
+
+        let event = ReplicaEvent::TransferPropagated(sn_data_types::TransferPropagated {
+            credit_proof: genesis_credit.clone(),
+            crediting_replica_keys: PublicKey::Bls(
+                genesis_elder.signing.replicas_pk_set().public_key(),
+            ),
+            crediting_replica_sig: genesis_elder
+                .signing
+                .sign_credit_proof(&genesis_credit)?
+                .ok_or(Error::UnexpectedOutcome)?,
+        });
+        wallet_replica.apply(event.clone())?;
+
+        println!("Finding genesis actor by id: {}", genesis_key);
+        let mut actor_balance = None;
+        for actor in actors.iter_mut() {
+            println!("Actor id: {}", actor.actor.id());
+            if actor.actor.id() == genesis_key {
+                println!("Found actor!");
+                if let Some(synched_event) = actor.actor.from_history(vec![event])? {
+                    actor
+                        .actor
+                        .apply(ActorEvent::TransfersSynched(synched_event))?;
+                    actor_balance = Some(actor.actor.balance());
+                }
+                break;
+            }
+        }
+        let balance = wallet_replica.balance();
+        assert_eq!(genesis_credit.amount(), balance);
+        assert_eq!(Some(balance), actor_balance);
+        Ok(())
+    }
 
     // ------------------------------------------------------------------------
     // ------------------------ Genesis --------------------------------
@@ -638,16 +695,17 @@ mod test {
         let mut wallets_in_genesis_section = vec![];
         let genesis_index = 0;
         let mut section_configs = section_configs;
-        let genesis_wallets_configs = section_configs.remove(genesis_index);
-        for balance in genesis_wallets_configs {
+        let mut genesis_section_configs = section_configs.remove(genesis_index);
+        for balance in genesis_section_configs {
             let wallet = setup_random_wallet(balance, genesis_index as u8)?;
             let _ = wallets_in_genesis_section.push(wallet);
         }
 
-        let (genesis_credit, genesis_section) =
+        let ((genesis_credit, genesis_wallet), genesis_section) =
             setup_genesis_section(replicas_per_section, wallets_in_genesis_section.clone())?;
-        let mut all_sections = vec![genesis_section];
+        let _ = wallets_in_genesis_section.insert(0, genesis_wallet);
 
+        let mut all_sections = vec![genesis_section];
         let mut other_section_wallets = vec![];
         if section_count > 1 {
             // setup rest of the sections
@@ -745,7 +803,7 @@ mod test {
     fn setup_genesis_section(
         replica_count: u8,
         wallets: Vec<TestWallet>,
-    ) -> Result<(CreditAgreementProof, Section)> {
+    ) -> Result<((CreditAgreementProof, TestWallet), Section)> {
         // setup genesis wallet
         let threshold = (replica_count - 1) as usize;
         let balance = u32::MAX as u64 * 1_000_000_000;
@@ -763,7 +821,7 @@ mod test {
         let genesis_credit = genesis::get_multi_genesis(balance, id, bls_secret_key.clone())?;
 
         let mut wallets = wallets;
-        wallets.insert(0, empty_genesis_wallet);
+        wallets.insert(0, empty_genesis_wallet.clone());
 
         // setup genesis replicas
         let mut elders = vec![];
@@ -797,7 +855,7 @@ mod test {
             }
         }
         Ok((
-            genesis_credit,
+            (genesis_credit, empty_genesis_wallet),
             Section {
                 index: 0,
                 id: peer_replicas,
