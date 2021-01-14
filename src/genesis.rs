@@ -54,6 +54,8 @@ pub fn get_genesis(
     let credit_sig_share = secret_key_share.sign(serialised_credit);
     let _ = credit_sig_shares.insert(0, credit_sig_share);
 
+    println!("Aggregating actor signature..");
+
     // Combine shares to produce the main signature.
     let actor_signature = sn_data_types::Signature::Bls(
         peer_replicas
@@ -74,6 +76,8 @@ pub fn get_genesis(
     let mut credit_sig_shares = BTreeMap::new();
     let credit_sig_share = secret_key_share.sign(serialised_credit);
     let _ = credit_sig_shares.insert(0, credit_sig_share);
+
+    println!("Aggregating replica signature..");
 
     let debiting_replicas_sig = sn_data_types::Signature::Bls(
         peer_replicas

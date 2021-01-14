@@ -442,6 +442,7 @@ impl WalletReplica {
 
         // Always verify signature first! (as to not leak any information).
         if let Err(e) = self.verify_actor_signature_share(signed_transfer) {
+            println!("Failed verification of actor sig!");
             return Outcome::rejected(e);
         } else if debit.sender() == credit.recipient() {
             return Outcome::rejected(Error::SameSenderAndRecipient);
@@ -460,7 +461,7 @@ impl WalletReplica {
                 return Outcome::rejected(Error::OperationOutOfOrder(debit.id.counter, counter));
             }
         }
-        
+
         debug!("Correct proposal.");
         debug!("Accumulating transfer validation proposal..");
 
@@ -593,31 +594,40 @@ impl WalletReplica {
             Ok(bytes) => bytes,
         };
 
-        let valid_debit = signed_transfer_share
-            .sender()
-            .verify(
-                &Signature::BlsShare(signed_debit.actor_signature.clone()),
-                debit_bytes,
-            )
-            .is_ok();
+        let key_share = signed_transfer_share
+            .actors()
+            .public_key_share(signed_debit.actor_signature.index);
 
+        let valid_debit = key_share.verify(&signed_debit.actor_signature.share, &debit_bytes);
+        let valid_credit = key_share.verify(&signed_credit.actor_signature.share, &credit_bytes);
+
+        // let valid_debit = signed_transfer_share
+        //     .sender()
+        //     .verify(
+        //         &Signature::BlsShare(signed_debit.actor_signature.clone()),
+        //         debit_bytes,
+        //     )
+        //     .is_ok();
         debug!("Debit is valid?: {:?}", valid_debit);
-        let valid_credit = signed_transfer_share
-            .sender()
-            .verify(
-                &Signature::BlsShare(signed_credit.actor_signature.clone()),
-                credit_bytes,
-            )
-            .is_ok();
+        // let valid_credit = signed_transfer_share
+        //     .sender()
+        //     .verify(
+        //         &Signature::BlsShare(signed_credit.actor_signature.clone()),
+        //         credit_bytes,
+        //     )
+        //     .is_ok();
         debug!("Credit is valid?: {:?}", valid_debit);
 
         if credit.id() != &debit.credit_id()? {
-            return Err(Error::CreditDebitIdMismatch)
+            return Err(Error::CreditDebitIdMismatch);
         }
         if valid_debit && valid_credit {
             Ok(())
         } else {
-            Err(Error::Unknown(format!("InvalidSignature! valid_debit: {}, valid_credit: {}", valid_debit, valid_credit)))
+            Err(Error::Unknown(format!(
+                "InvalidSignature! valid_debit: {}, valid_credit: {}",
+                valid_debit, valid_credit
+            )))
         }
     }
 }
