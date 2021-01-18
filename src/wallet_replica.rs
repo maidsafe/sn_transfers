@@ -494,11 +494,8 @@ impl WalletReplica {
             }
         }
 
-        let mut map = HashMap::new();
-        let map = self.pending_proposals.get(&debit_counter).unwrap_or({
-            let _ = map.insert(share_index, proposal.clone());
-            &map
-        });
+        let map = HashMap::new();
+        let map = self.pending_proposals.get(&debit_counter).unwrap_or(&map);
 
         // If the previous count of accumulated + current proposal coming in here,
         // is greater than the threshold, then we have reached the quorum needed
