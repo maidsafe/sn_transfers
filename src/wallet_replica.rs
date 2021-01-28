@@ -582,21 +582,7 @@ impl WalletReplica {
         let valid_debit = key_share.verify(&signed_debit.actor_signature.share, &debit_bytes);
         let valid_credit = key_share.verify(&signed_credit.actor_signature.share, &credit_bytes);
 
-        // let valid_debit = signed_transfer_share
-        //     .sender()
-        //     .verify(
-        //         &Signature::BlsShare(signed_debit.actor_signature.clone()),
-        //         debit_bytes,
-        //     )
-        //     .is_ok();
         debug!("Debit is valid?: {:?}", valid_debit);
-        // let valid_credit = signed_transfer_share
-        //     .sender()
-        //     .verify(
-        //         &Signature::BlsShare(signed_credit.actor_signature.clone()),
-        //         credit_bytes,
-        //     )
-        //     .is_ok();
         debug!("Credit is valid?: {:?}", valid_debit);
 
         if credit.id() != &debit.credit_id()? {

@@ -8,16 +8,16 @@
 
 use super::{
     wallet::{Wallet, WalletOwner, WalletSnapshot},
-    ActorEvent, Error, Outcome, ReceivedCredit, ReplicaValidator, Result, TernaryResult,
-    TransferInitiated, TransferRegistrationSent, TransferValidated, TransferValidationReceived,
-    TransfersSynched,
+    ActorEvent, Error, Outcome, ReplicaValidator, Result, TernaryResult, TransferInitiated,
+    TransferRegistrationSent, TransferValidated, TransferValidationReceived, TransfersSynched,
 };
 use crdts::Dot;
 use itertools::Itertools;
 use log::debug;
 use sn_data_types::{
-    Credit, CreditId, Debit, DebitId, Keypair, Money, PublicKey, ReplicaEvent, Signature,
-    SignatureShare, SignedCredit, SignedDebit, TransferAgreementProof, WalletInfo,
+    ActorHistory, Credit, CreditAgreementProof, CreditId, Debit, DebitId, Keypair, Money,
+    PublicKey, Signature, SignatureShare, SignedCredit, SignedDebit, TransferAgreementProof,
+    WalletInfo,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -368,18 +368,18 @@ impl<V: ReplicaValidator> Actor<V> {
     /// as it will have a balance that is higher than at the Replicas.
     /// (*Non-complete means non-contiguous set or not starting immediately
     /// after current debit version.)
-    pub fn from_history(&self, events: Vec<ReplicaEvent>) -> Outcome<TransfersSynched> {
-        if events.is_empty() {
+    pub fn from_history(&self, history: ActorHistory) -> Outcome<TransfersSynched> {
+        if history.is_empty() {
             return Outcome::no_change();
         }
         // filter out any credits and debits already existing in current wallet
-        let credits = self.validate_credits(&events);
-        let debits = self.validate_debits(events);
+        let credits = self.validate_credits(&history.credits);
+        let debits = self.validate_debits(&history.debits);
         if !credits.is_empty() || !debits.is_empty() {
             let mut wallet = self.wallet.clone();
             for credit in credits {
                 // append credits _before_ debits
-                wallet.apply_credit(credit.credit_proof.signed_credit.credit)?;
+                wallet.apply_credit(credit.signed_credit.credit)?;
             }
             for proof in debits {
                 // append debits _after_ credits
@@ -392,31 +392,21 @@ impl<V: ReplicaValidator> Actor<V> {
                 snapshot.credit_ids,
             )
         } else {
-            Err(Error::NothingToSync)
+            Err(Error::NothingToSync) // TODO: the error is actually that credits and/or debits failed validation..
         }
     }
 
-    fn validate_credits(&self, events: &[ReplicaEvent]) -> Vec<ReceivedCredit> {
-        debug!("Validating credits..!");
-        let valid_credits_1 = events.iter().filter_map(|e| match e {
-            ReplicaEvent::TransferPropagated(e) => Some(e.credit_proof.clone()),
-            _ => None,
-        });
-        let valid_credits_2 = events.iter().filter_map(|e| match e {
-            ReplicaEvent::TransferRegistered(e) => Some(e.transfer_proof.credit_proof()),
-            _ => None,
-        });
-
-        let valid_credits: Vec<_> = valid_credits_1
-            .chain(valid_credits_2)
+    fn validate_credits(&self, credits: &[CreditAgreementProof]) -> Vec<CreditAgreementProof> {
+        let valid_credits: Vec<_> = credits
+            .iter()
+            .cloned()
             .unique_by(|e| *e.id())
-            .map(|credit_proof| ReceivedCredit { credit_proof })
-            .filter(|_credit| {
+            .filter(|_credit_proof| {
                 #[cfg(feature = "simulated-payouts")]
                 return true;
 
                 #[cfg(not(feature = "simulated-payouts"))]
-                self.verify_credit_proof(_credit).is_ok()
+                self.verify_credit_proof(_credit_proof).is_ok()
             })
             .filter(|credit| self.id() == credit.recipient())
             .filter(|credit| !self.wallet.contains(&credit.id()))
@@ -429,15 +419,10 @@ impl<V: ReplicaValidator> Actor<V> {
     /// and makes sure the returned set is a contiguous
     /// set of debits beginning immediately after current debit version.
     #[allow(clippy::explicit_counter_loop)]
-    fn validate_debits(&self, events: Vec<ReplicaEvent>) -> Vec<TransferAgreementProof> {
-        let mut debits: Vec<_> = events
+    fn validate_debits(&self, debits: &[TransferAgreementProof]) -> Vec<TransferAgreementProof> {
+        let mut debits: Vec<_> = debits
             .iter()
-            .filter_map(|e| match e {
-                ReplicaEvent::TransferRegistered(e) => Some(e),
-                _ => None,
-            })
             .unique_by(|e| e.id())
-            .map(|e| &e.transfer_proof)
             .filter(|transfer| self.id() == transfer.sender())
             .filter(|transfer| transfer.id().counter >= self.wallet.next_debit())
             .filter(|transfer| self.verify_transfer_proof(transfer).is_ok())
@@ -599,16 +584,9 @@ impl<V: ReplicaValidator> Actor<V> {
 
     /// Verify that this is a valid ReceivedCredit.
     #[cfg(not(feature = "simulated-payouts"))]
-    fn verify_credit_proof(&self, credit: &ReceivedCredit) -> Result<()> {
-        let proof = &credit.credit_proof;
+    fn verify_credit_proof(&self, proof: &CreditAgreementProof) -> Result<()> {
         let debiting_replicas_keys = PublicKey::Bls(proof.debiting_replicas_keys.public_key());
 
-        // if !self
-        //     .replica_validator
-        //     .is_valid(credit.crediting_replica_keys)
-        // {
-        //     return Err(Error::Unknown(format!("Unknown crediting replica keys: {}", credit.crediting_replica_keys)));
-        // }
         if !self.replica_validator.is_valid(debiting_replicas_keys) {
             return Err(Error::Unknown(format!(
                 "Unknown debiting replica keys: {}",
