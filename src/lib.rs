@@ -28,7 +28,6 @@
 mod actor;
 mod error;
 mod genesis;
-mod replica;
 mod replica_signing;
 mod wallet;
 mod wallet_replica;

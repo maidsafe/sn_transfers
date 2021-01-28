@@ -1,4 +1,4 @@
-// Copyright 2020 MaidSafe.net limited.
+// Copyright 2021 MaidSafe.net limited.
 //
 // This SAFE Network Software is licensed to you under The General Public License (GPL), version 3.
 // Unless required by applicable law or agreed to in writing, the SAFE Network Software distributed
@@ -47,8 +47,6 @@ pub struct WalletReplica {
     key_index: usize,
     /// The PK set of our peer Replicas.
     peer_replicas: PublicKeySet,
-    // /// PK sets of other known groups of Replicas.
-    // other_groups: HashSet<PublicKeySet>,
     /// All wallets that this Replica validates transfers for.
     wallet: Wallet,
     /// For multisig validations.
@@ -72,7 +70,6 @@ impl WalletReplica {
             replica_id,
             key_index,
             peer_replicas,
-            //Default::default(),
             Wallet::new(id),
             Default::default(),
             None,
@@ -91,7 +88,6 @@ impl WalletReplica {
         replica_id: PublicKeyShare,
         key_index: usize,
         peer_replicas: PublicKeySet,
-        //other_groups: HashSet<PublicKeySet>,
         wallet: Wallet,
         pending_proposals: HashMap<u64, HashMap<usize, TransferValidationProposed>>,
         pending_debit: Option<u64>,
@@ -140,14 +136,6 @@ impl WalletReplica {
         }
         self.receive_propagated(credit_proof, past_key)
     }
-
-    // /// Adds a PK set for a a new group that we learn of.
-    // pub fn add_known_group(&self, group: PublicKeySet) -> Outcome<KnownGroupAdded> {
-    //     if self.other_groups.contains(&group) {
-    //         return Err(Error::KeyExists);
-    //     }
-    //     Outcome::success(KnownGroupAdded { group })
-    // }
 
     /// For now, with test money there is no from wallet.., money is created from thin air.
     pub fn test_validate_transfer(
@@ -257,10 +245,6 @@ impl WalletReplica {
     /// and thus anything that breaks here, is a bug in the validation..
     pub fn apply(&mut self, event: ReplicaEvent) -> Result<()> {
         match event {
-            // ReplicaEvent::KnownGroupAdded(e) => {
-            //     let _ = self.other_groups.insert(e.group);
-            //     Ok(())
-            // }
             ReplicaEvent::TransferValidationProposed(e) => {
                 let debit = &e.signed_debit.debit;
                 let index = e.signed_debit.actor_signature.index;
