@@ -43,8 +43,8 @@ pub use self::{
 
 use serde::{Deserialize, Serialize};
 use sn_data_types::{
-    CreditAgreementProof, CreditId, DebitId, Money, PublicKey, SignedCredit, SignedDebit,
-    TransferAgreementProof, TransferValidated,
+    CreditId, DebitId, Money, PublicKey, SignedCredit, SignedDebit, TransferAgreementProof,
+    TransferValidated,
 };
 use std::collections::HashSet;
 
@@ -66,33 +66,6 @@ impl<T> TernaryResult<T> for Outcome<T> {
     }
     fn rejected(error: Error) -> Self {
         Err(error)
-    }
-}
-
-/// A received credit, contains the CreditAgreementProof from the sender Replicas,
-/// as well as the public key of those Replicas, for us to verify that they are valid Replicas.
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
-pub struct ReceivedCredit {
-    /// The sender's aggregated Replica signatures of the credit.
-    pub credit_proof: CreditAgreementProof,
-    ///// The public key of the signing Replicas.
-    //pub crediting_replica_keys: PublicKey,
-}
-
-impl ReceivedCredit {
-    /// Get the transfer id
-    pub fn id(&self) -> &CreditId {
-        self.credit_proof.id()
-    }
-
-    /// Get the amount of this transfer
-    pub fn amount(&self) -> Money {
-        self.credit_proof.amount()
-    }
-
-    /// Get the recipient of this transfer
-    pub fn recipient(&self) -> PublicKey {
-        self.credit_proof.recipient()
     }
 }
 
@@ -190,8 +163,8 @@ mod test {
         Dot,
     };
     use sn_data_types::{
-        Credit, CreditAgreementProof, CreditId, Debit, Keypair, Money, PublicKey, ReplicaEvent,
-        SignedTransfer, Transfer, TransferAgreementProof,
+        ActorHistory, Credit, CreditAgreementProof, CreditId, Debit, Keypair, Money, PublicKey,
+        ReplicaEvent, SignedTransfer, Transfer, TransferAgreementProof,
     };
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
@@ -254,7 +227,7 @@ mod test {
                 .sign_credit_proof(&genesis_credit)?
                 .ok_or(Error::UnexpectedOutcome)?,
         });
-        wallet_replica.apply(event.clone())?;
+        wallet_replica.apply(event)?;
 
         println!("Finding genesis actor by id: {}", genesis_key);
         let mut actor_balance = None;
@@ -262,7 +235,10 @@ mod test {
             println!("Actor id: {}", actor.actor.id());
             if actor.actor.id() == genesis_key {
                 println!("Found actor!");
-                if let Some(synched_event) = actor.actor.from_history(vec![event])? {
+                if let Some(synched_event) = actor.actor.from_history(ActorHistory {
+                    credits: vec![genesis_credit.clone()],
+                    debits: vec![],
+                })? {
                     actor
                         .actor
                         .apply(ActorEvent::TransfersSynched(synched_event))?;
