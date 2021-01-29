@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.2.11](https://github.com/maidsafe/sn_transfers/compare/v0.2.10...v0.2.11) (2021-01-29)
+
+
+### Features
+
+* **genesis:** use replica signing for genesis ([0580cfa](https://github.com/maidsafe/sn_transfers/commit/0580cfa8844ee413d794d975c2de6843ad945c51))
+* **multi_sig:** impl validation proposal flow ([ad5a734](https://github.com/maidsafe/sn_transfers/commit/ad5a73407d28a4532afb7d965a149a0f1b0e0b60))
+* **multisig-wallet:** expose public key set api ([44f35ab](https://github.com/maidsafe/sn_transfers/commit/44f35abe5f8e90bbcbab73aa11a2b8416e0c1d61))
+
+
+### Bug Fixes
+
+* **genesis:** sign correct item ([0e80684](https://github.com/maidsafe/sn_transfers/commit/0e806841e26b14f1a2a2de7faeb56c6bfc0a5060))
+* **proposals:** don't add current proposal twice ([4bfe044](https://github.com/maidsafe/sn_transfers/commit/4bfe044182200288a45d24e5bba78948f1da846d))
+* **signature:** use correct keys for validation ([325ca1c](https://github.com/maidsafe/sn_transfers/commit/325ca1c4f94781d657b48a1bcfc0c2297b24073b))
+
 ### [0.2.10](https://github.com/maidsafe/sn_transfers/compare/v0.2.9...v0.2.10) (2021-01-18)
 
 ### [0.2.9](https://github.com/maidsafe/sn_transfers/compare/v0.2.8...v0.2.9) (2021-01-05)
