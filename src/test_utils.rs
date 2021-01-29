@@ -6,10 +6,19 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use crate::{Error, Result};
-use sn_data_types::{Credit, CreditAgreementProof, Money, PublicKey, SignedCredit};
-use std::collections::BTreeMap;
-use threshold_crypto::{PublicKeySet, SecretKeySet, SecretKeyShare};
+use crate::{
+    ActorSigning, Error, ReplicaValidator, Result, TransferActor as Actor, Wallet, WalletOwner,
+    WalletReplica,
+};
+use sn_data_types::{
+    Credit, CreditAgreementProof, Keypair, Money, PublicKey, Signature, SignatureShare,
+    SignedCredit, SignedDebit, SignedTransfer,
+};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
+use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKeySet, SecretKeyShare};
 
 /// Produces a genesis balance for a new network.
 #[allow(unused)]
@@ -156,4 +165,157 @@ pub fn get_multi_genesis(
         debiting_replicas_sig,
         debiting_replicas_keys: peer_replicas,
     })
+}
+
+pub struct Network {
+    pub genesis_credit: CreditAgreementProof,
+    pub sections: Vec<Section>,
+    pub actors: Vec<TestActor>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Validator {}
+
+impl ReplicaValidator for Validator {
+    fn is_valid(&self, _section: PublicKey) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TestWallet {
+    pub wallet: Wallet,
+    pub keypair: Arc<Keypair>,
+    pub section: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct TestActor {
+    pub actor: Actor<Validator, TestSigning>,
+    pub section: Section,
+}
+#[derive(Debug, Clone)]
+pub struct Elder {
+    pub id: PublicKeyShare,
+    pub replicas: HashMap<PublicKey, WalletReplica>,
+    pub signing: ReplicaSigning,
+}
+
+#[derive(Debug, Clone)]
+pub struct Section {
+    pub index: u8,
+    pub id: PublicKeySet,
+    pub elders: Vec<Elder>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SectionKeys {
+    pub index: u8,
+    pub id: PublicKeySet,
+    pub keys: Vec<(SecretKeyShare, usize)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TestSigning {
+    pub keypair: Arc<Keypair>,
+}
+
+impl ActorSigning for TestSigning {
+    fn id(&self) -> WalletOwner {
+        match self.keypair.as_ref() {
+            Keypair::Ed25519(pair) => WalletOwner::Single(PublicKey::Ed25519(pair.public)),
+            Keypair::BlsShare(share) => WalletOwner::Multi(share.public_key_set.clone()),
+        }
+    }
+
+    fn sign(&self, data: &[u8]) -> Signature {
+        self.keypair.sign(data)
+    }
+
+    fn verify(&self, signature: &Signature, data: &[u8]) -> Result<()> {
+        self.keypair
+            .public_key()
+            .verify(signature, data)
+            .map_err(Error::NetworkDataError)
+    }
+}
+
+/// An impl of ReplicaSigningTrait.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplicaSigning {
+    /// The public key share of this Replica.
+    id: PublicKeyShare,
+    /// Secret key share.
+    secret_key: SecretKeyShare,
+    /// The index of this Replica key share, in the group set.
+    key_index: usize,
+    /// The PK set of our peer Replicas.
+    peer_replicas: PublicKeySet,
+}
+
+impl ReplicaSigning {
+    /// A new instance
+    pub fn new(secret_key: SecretKeyShare, key_index: usize, peer_replicas: PublicKeySet) -> Self {
+        let id = secret_key.public_key_share();
+        Self {
+            secret_key,
+            id,
+            key_index,
+            peer_replicas,
+        }
+    }
+
+    /// Get the replica's PK set
+    pub fn replicas_pk_set(&self) -> &PublicKeySet {
+        &self.peer_replicas
+    }
+
+    #[allow(unused)]
+    pub fn try_genesis(&self, balance: u64) -> Result<CreditAgreementProof> {
+        get_genesis(
+            balance,
+            PublicKey::Bls(self.peer_replicas.public_key()),
+            self.peer_replicas.clone(),
+            self.secret_key.clone(),
+        )
+    }
+
+    pub fn sign_transfer(
+        &self,
+        signed_transfer: &SignedTransfer,
+    ) -> Result<(SignatureShare, SignatureShare)> {
+        let replica_debit_sig = self.sign_validated_debit(&signed_transfer.debit)?;
+        let replica_credit_sig = self.sign_validated_credit(&signed_transfer.credit)?;
+        Ok((replica_debit_sig, replica_credit_sig))
+    }
+
+    pub fn sign_validated_debit(&self, debit: &SignedDebit) -> Result<SignatureShare> {
+        match bincode::serialize(debit) {
+            Err(_) => Err(Error::Serialisation("Could not serialise debit".into())),
+            Ok(data) => Ok(SignatureShare {
+                index: self.key_index,
+                share: self.secret_key.sign(data),
+            }),
+        }
+    }
+
+    pub fn sign_validated_credit(&self, credit: &SignedCredit) -> Result<SignatureShare> {
+        match bincode::serialize(credit) {
+            Err(_) => Err(Error::Serialisation("Could not serialise credit".into())),
+            Ok(data) => Ok(SignatureShare {
+                index: self.key_index,
+                share: self.secret_key.sign(data),
+            }),
+        }
+    }
+
+    pub fn sign_credit_proof(&self, proof: &CreditAgreementProof) -> Result<SignatureShare> {
+        match bincode::serialize(proof) {
+            Err(_) => Err(Error::Serialisation("Could not serialise proof".into())),
+            Ok(data) => Ok(SignatureShare {
+                index: self.key_index,
+                share: self.secret_key.sign(data),
+            }),
+        }
+    }
 }

@@ -27,16 +27,13 @@
 
 mod actor;
 mod error;
-mod genesis;
-mod replica_signing;
+mod test_utils;
 mod wallet;
 mod wallet_replica;
 
 pub use self::{
-    actor::Actor as TransferActor,
+    actor::{Actor as TransferActor, ActorSigning},
     error::Error,
-    genesis::get_genesis,
-    replica_signing::ReplicaSigning,
     wallet::{Wallet, WalletOwner},
     wallet_replica::WalletReplica,
 };
@@ -155,8 +152,8 @@ pub struct TransferRegistrationSent {
 #[allow(unused)]
 mod test {
     use crate::{
-        actor::Actor, genesis, wallet, wallet_replica::WalletReplica, ActorEvent, Error,
-        ReplicaSigning, ReplicaValidator, Result, TransferInitiated, Wallet, WalletOwner,
+        actor::Actor, test_utils, test_utils::*, wallet, wallet_replica::WalletReplica, ActorEvent,
+        Error, ReplicaValidator, Result, TransferInitiated, Wallet, WalletOwner,
     };
     use crdts::{
         quickcheck::{quickcheck, TestResult},
@@ -164,11 +161,12 @@ mod test {
     };
     use sn_data_types::{
         ActorHistory, Credit, CreditAgreementProof, CreditId, Debit, Keypair, Money, PublicKey,
-        ReplicaEvent, SignedTransfer, Transfer, TransferAgreementProof,
+        ReplicaEvent, SignatureShare, SignedCredit, SignedDebit, SignedTransfer, Transfer,
+        TransferAgreementProof,
     };
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
-    use threshold_crypto::{PublicKeySet, SecretKey, SecretKeySet, SecretKeyShare};
+    use threshold_crypto::{PublicKeySet, PublicKeyShare, SecretKey, SecretKeySet, SecretKeyShare};
 
     macro_rules! hashmap {
         ($( $key: expr => $val: expr ),*) => {{
@@ -222,10 +220,7 @@ mod test {
             crediting_replica_keys: PublicKey::Bls(
                 genesis_elder.signing.replicas_pk_set().public_key(),
             ),
-            crediting_replica_sig: genesis_elder
-                .signing
-                .sign_credit_proof(&genesis_credit)?
-                .ok_or(Error::UnexpectedOutcome)?,
+            crediting_replica_sig: genesis_elder.signing.sign_credit_proof(&genesis_credit)?,
         });
         wallet_replica.apply(event)?;
 
@@ -287,10 +282,7 @@ mod test {
                 crediting_replica_keys: PublicKey::Bls(
                     genesis_elder.signing.replicas_pk_set().public_key(),
                 ),
-                crediting_replica_sig: genesis_elder
-                    .signing
-                    .sign_credit_proof(&genesis_credit)?
-                    .ok_or(Error::UnexpectedOutcome)?,
+                crediting_replica_sig: genesis_elder.signing.sign_credit_proof(&genesis_credit)?,
             },
         ))?;
         let balance = wallet_replica.balance();
@@ -325,10 +317,7 @@ mod test {
                 crediting_replica_keys: PublicKey::Bls(
                     genesis_elder.signing.replicas_pk_set().public_key(),
                 ),
-                crediting_replica_sig: genesis_elder
-                    .signing
-                    .sign_credit_proof(&genesis_credit)?
-                    .ok_or(Error::UnexpectedOutcome)?,
+                crediting_replica_sig: genesis_elder.signing.sign_credit_proof(&genesis_credit)?,
             },
         ))?;
 
@@ -451,38 +440,34 @@ mod test {
                 debit: transfer.signed_debit.clone(),
                 credit: transfer.signed_credit.clone(),
             };
-            if let Some((replica_debit_sig, replica_credit_sig)) =
-                elder.signing.sign_transfer(&signed_transfer)?
-            {
-                let validation = sn_data_types::TransferValidated {
-                    signed_credit: signed_transfer.credit,
-                    signed_debit: signed_transfer.debit,
-                    replica_debit_sig,
-                    replica_credit_sig,
-                    replicas: sender.section.id.clone(),
-                };
-                // then apply to inmem state
-                wallet_replica.apply(ReplicaEvent::TransferValidated(validation.clone()))?;
+            let (replica_debit_sig, replica_credit_sig) =
+                elder.signing.sign_transfer(&signed_transfer)?;
+            let validation = sn_data_types::TransferValidated {
+                signed_credit: signed_transfer.credit,
+                signed_debit: signed_transfer.debit,
+                replica_debit_sig,
+                replica_credit_sig,
+                replicas: sender.section.id.clone(),
+            };
+            // then apply to inmem state
+            wallet_replica.apply(ReplicaEvent::TransferValidated(validation.clone()))?;
 
-                let validation_received = sender
+            let validation_received = sender
+                .actor
+                .receive(validation)?
+                .ok_or(Error::UnexpectedOutcome)?;
+            sender.actor.apply(ActorEvent::TransferValidationReceived(
+                validation_received.clone(),
+            ))?;
+            if let Some(proof) = validation_received.proof {
+                let registered = sender
                     .actor
-                    .receive(validation)?
+                    .register(proof.clone())?
                     .ok_or(Error::UnexpectedOutcome)?;
-                sender.actor.apply(ActorEvent::TransferValidationReceived(
-                    validation_received.clone(),
-                ))?;
-                if let Some(proof) = validation_received.proof {
-                    let registered = sender
-                        .actor
-                        .register(proof.clone())?
-                        .ok_or(Error::UnexpectedOutcome)?;
-                    sender
-                        .actor
-                        .apply(ActorEvent::TransferRegistrationSent(registered))?;
-                    return Ok(Some(proof));
-                }
-            } else {
-                return Err(Error::InvalidSignature);
+                sender
+                    .actor
+                    .apply(ActorEvent::TransferRegistrationSent(registered))?;
+                return Ok(Some(proof));
             }
         }
         Ok(None)
@@ -525,22 +510,17 @@ mod test {
                     .receive_propagated(&credit_proof, || past_key)?
                     .ok_or(Error::UnexpectedOutcome)?;
 
-                if let Some(crediting_replica_sig) =
-                    replica.signing.sign_credit_proof(&credit_proof)?
-                {
-                    let propagated = sn_data_types::TransferPropagated {
-                        credit_proof: credit_proof.clone(),
-                        crediting_replica_keys: PublicKey::Bls(
-                            replica.signing.replicas_pk_set().public_key(),
-                        ),
-                        crediting_replica_sig,
-                    };
-                    // then apply to inmem state
-                    wallet_replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()))?;
-                    Ok(ReplicaEvent::TransferPropagated(propagated))
-                } else {
-                    Err(Error::UnexpectedOutcome)
-                }
+                let crediting_replica_sig = replica.signing.sign_credit_proof(&credit_proof)?;
+                let propagated = sn_data_types::TransferPropagated {
+                    credit_proof: credit_proof.clone(),
+                    crediting_replica_keys: PublicKey::Bls(
+                        replica.signing.replicas_pk_set().public_key(),
+                    ),
+                    crediting_replica_sig,
+                };
+                // then apply to inmem state
+                wallet_replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()))?;
+                Ok(ReplicaEvent::TransferPropagated(propagated))
             })
             .filter_map(|c: Result<ReplicaEvent>| match c {
                 Ok(c) => Some(c),
@@ -628,7 +608,9 @@ mod test {
 
         let actor = Actor::from_snapshot(
             wallet.wallet,
-            wallet.keypair,
+            TestSigning {
+                keypair: wallet.keypair,
+            },
             section.id.clone(),
             Validator {},
         );
@@ -793,7 +775,7 @@ mod test {
         );
         let owner = WalletOwner::Multi(peer_replicas.clone());
         let empty_genesis_wallet = setup_wallet(0, 0, keypair, Wallet::new(owner))?;
-        let genesis_credit = genesis::get_multi_genesis(balance, id, bls_secret_key.clone())?;
+        let genesis_credit = get_multi_genesis(balance, id, bls_secret_key.clone())?;
 
         let mut wallets = wallets;
         wallets.insert(0, empty_genesis_wallet.clone());
@@ -842,53 +824,4 @@ mod test {
     // ------------------------------------------------------------------------
     // ------------------------ Structs ---------------------------------------
     // ------------------------------------------------------------------------
-
-    struct Network {
-        genesis_credit: CreditAgreementProof,
-        sections: Vec<Section>,
-        actors: Vec<TestActor>,
-    }
-
-    #[derive(Debug, Clone)]
-    struct Validator {}
-
-    impl ReplicaValidator for Validator {
-        fn is_valid(&self, _section: PublicKey) -> bool {
-            true
-        }
-    }
-
-    #[derive(Debug, Clone)]
-    struct TestWallet {
-        wallet: Wallet,
-        keypair: Arc<Keypair>,
-        section: u8,
-    }
-
-    #[derive(Debug, Clone)]
-    struct TestActor {
-        actor: Actor<Validator>,
-        section: Section,
-    }
-
-    #[derive(Debug, Clone)]
-    struct Elder {
-        id: threshold_crypto::PublicKeyShare,
-        replicas: HashMap<PublicKey, WalletReplica>,
-        signing: ReplicaSigning,
-    }
-
-    #[derive(Debug, Clone)]
-    struct Section {
-        index: u8,
-        id: PublicKeySet,
-        elders: Vec<Elder>,
-    }
-
-    #[derive(Debug, Clone)]
-    struct SectionKeys {
-        index: u8,
-        id: PublicKeySet,
-        keys: Vec<(SecretKeyShare, usize)>,
-    }
 }

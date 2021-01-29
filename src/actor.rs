@@ -15,21 +15,22 @@ use crdts::Dot;
 use itertools::Itertools;
 use log::debug;
 use sn_data_types::{
-    ActorHistory, Credit, CreditAgreementProof, CreditId, Debit, DebitId, Keypair, Money,
-    PublicKey, Signature, SignatureShare, SignedCredit, SignedDebit, TransferAgreementProof,
-    WalletInfo,
+    ActorHistory, Credit, CreditAgreementProof, CreditId, Debit, DebitId, Money, PublicKey,
+    Signature, SignatureShare, SignedCredit, SignedDebit, TransferAgreementProof, WalletInfo,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
 use threshold_crypto::PublicKeySet;
 
-/// A signature share, with its index in the combined collection.
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub struct SecretKeyShare {
-    /// Index in the combined collection.
-    pub index: usize,
-    /// Replica signature over the transfer cmd.
-    pub secret_key: threshold_crypto::SecretKeyShare,
+///
+pub trait ActorSigning {
+    ///
+    fn id(&self) -> WalletOwner;
+    // ///
+    // fn multi_id(&self) -> Option<&PublicKeySet>;
+    ///
+    fn sign(&self, data: &[u8]) -> Signature;
+    ///
+    fn verify(&self, sig: &Signature, data: &[u8]) -> Result<()>;
 }
 
 /// The Actor is the part of an AT2 system
@@ -37,9 +38,11 @@ pub struct SecretKeyShare {
 /// to validate them, and then receive the proof of agreement.
 /// It also syncs transfers from the Replicas.
 #[derive(Debug, Clone)]
-pub struct Actor<V: ReplicaValidator> {
+pub struct Actor<V: ReplicaValidator, S: ActorSigning> {
+    ///
     id: WalletOwner,
-    keypair: Arc<Keypair>,
+    ///
+    signing: S,
     /// Set of all transfers impacting a given identity
     wallet: Wallet,
     /// Ensures that the actor's transfer
@@ -55,7 +58,7 @@ pub struct Actor<V: ReplicaValidator> {
     replica_validator: V,
 }
 
-impl<V: ReplicaValidator> Actor<V> {
+impl<V: ReplicaValidator, S: ActorSigning> Actor<V, S> {
     /// Use this ctor for a new instance,
     /// or to rehydrate from events ([see the synch method](Actor::synch)).
     /// Pass in the key set of the replicas of this actor, i.e. our replicas.
@@ -64,15 +67,12 @@ impl<V: ReplicaValidator> Actor<V> {
     /// If upper layer trusts them, the validator might do nothing but return "true".
     /// If it wants to execute some logic for verifying that the remote replicas are in fact part of the system,
     /// before accepting credits, it then implements that in the replica_validator.
-    pub fn new(keypair: Arc<Keypair>, replicas: PublicKeySet, replica_validator: V) -> Actor<V> {
-        let id = match keypair.as_ref() {
-            Keypair::Ed25519(pair) => WalletOwner::Single(PublicKey::Ed25519(pair.public)),
-            Keypair::BlsShare(share) => WalletOwner::Multi(share.public_key_set.clone()),
-        };
+    pub fn new(signing: S, replicas: PublicKeySet, replica_validator: V) -> Actor<V, S> {
+        let id = signing.id();
         let wallet = Wallet::new(id.clone());
         Actor {
             id,
-            keypair,
+            signing,
             replicas,
             replica_validator,
             wallet,
@@ -82,19 +82,12 @@ impl<V: ReplicaValidator> Actor<V> {
     }
 
     ///
-    pub fn from_info(
-        keypair: Arc<Keypair>,
-        info: WalletInfo,
-        replica_validator: V,
-    ) -> Result<Actor<V>> {
-        let id = match keypair.as_ref() {
-            Keypair::Ed25519(pair) => WalletOwner::Single(PublicKey::Ed25519(pair.public)),
-            Keypair::BlsShare(share) => WalletOwner::Multi(share.public_key_set.clone()),
-        };
+    pub fn from_info(signing: S, info: WalletInfo, replica_validator: V) -> Result<Actor<V, S>> {
+        let id = signing.id();
         let wallet = Wallet::new(id.clone());
         let mut actor = Actor {
             id,
-            keypair,
+            signing,
             replicas: info.replicas,
             replica_validator,
             wallet,
@@ -110,14 +103,14 @@ impl<V: ReplicaValidator> Actor<V> {
     /// Temp, for test purposes
     pub fn from_snapshot(
         wallet: Wallet,
-        keypair: Arc<Keypair>,
+        signing: S,
         replicas: PublicKeySet,
         replica_validator: V,
-    ) -> Actor<V> {
+    ) -> Actor<V, S> {
         let id = wallet.id().clone();
         Actor {
             id,
-            keypair,
+            signing,
             replicas,
             replica_validator,
             wallet,
@@ -194,14 +187,14 @@ impl<V: ReplicaValidator> Actor<V> {
             Err(_) => return Err(Error::Serialisation("Could not serialise debit".into())),
             Ok(data) => SignedDebit {
                 debit,
-                actor_signature: self.keypair.sign(&data),
+                actor_signature: self.signing.sign(&data),
             },
         };
         let signed_credit = match bincode::serialize(&credit) {
             Err(_) => return Err(Error::Serialisation("Could not serialise credit".into())),
             Ok(data) => SignedCredit {
                 credit,
-                actor_signature: self.keypair.sign(&data),
+                actor_signature: self.signing.sign(&data),
             },
         };
 
@@ -644,7 +637,7 @@ impl<V: ReplicaValidator> Actor<V> {
                     false
                 }
             }
-            ed @ Signature::Ed25519(_) => self.keypair.public_key().verify(ed, data).is_ok(),
+            ed @ Signature::Ed25519(_) => self.signing.verify(ed, &data).is_ok(),
             Signature::BlsShare(share) => {
                 if let WalletOwner::Multi(set) = self.owner() {
                     let pubkey_share = set.public_key_share(share.index);
@@ -660,8 +653,8 @@ impl<V: ReplicaValidator> Actor<V> {
 #[cfg(test)]
 mod test {
     use super::{
-        Actor, ActorEvent, Error, ReplicaValidator, Result, TransferInitiated,
-        TransferRegistrationSent, Wallet, WalletOwner,
+        super::test_utils::TestSigning, Actor, ActorEvent, Error, ReplicaValidator, Result,
+        TransferInitiated, TransferRegistrationSent, Wallet, WalletOwner,
     };
     use crdts::Dot;
     use serde::Serialize;
@@ -669,8 +662,7 @@ mod test {
         Credit, Debit, Keypair, Money, PublicKey, Signature, SignatureShare,
         TransferAgreementProof, TransferValidated,
     };
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
+    use std::{collections::BTreeMap, sync::Arc};
     use threshold_crypto::{SecretKey, SecretKeySet};
     struct Validator {}
 
@@ -787,7 +779,7 @@ mod test {
         Ok(())
     }
 
-    fn get_debit(actor: &Actor<Validator>) -> Result<TransferInitiated> {
+    fn get_debit(actor: &Actor<Validator, TestSigning>) -> Result<TransferInitiated> {
         let event = actor
             .transfer(Money::from_nano(10), get_random_pk(), "asdf".to_string())?
             .ok_or(Error::UnexpectedOutcome)?;
@@ -902,7 +894,9 @@ mod test {
         })
     }
 
-    fn get_actor_and_replicas_sk_set(amount: u64) -> Result<(Actor<Validator>, SecretKeySet)> {
+    fn get_actor_and_replicas_sk_set(
+        amount: u64,
+    ) -> Result<(Actor<Validator, TestSigning>, SecretKeySet)> {
         let mut rng = rand::thread_rng();
         let keypair = Keypair::new_ed25519(&mut rng);
         let client_pubkey = keypair.public_key();
@@ -914,7 +908,10 @@ mod test {
         let replica_validator = Validator {};
         let mut wallet = Wallet::new(WalletOwner::Single(credit.recipient()));
         wallet.apply_credit(credit)?;
-        let actor = Actor::from_snapshot(wallet, Arc::new(keypair), replicas_id, replica_validator);
+        let signing = TestSigning {
+            keypair: Arc::new(keypair),
+        };
+        let actor = Actor::from_snapshot(wallet, signing, replicas_id, replica_validator);
         Ok((actor, bls_secret_key))
     }
 
