@@ -11,8 +11,8 @@ use crate::{
     WalletReplica,
 };
 use sn_data_types::{
-    Credit, CreditAgreementProof, Keypair, Money, PublicKey, Signature, SignatureShare,
-    SignedCredit, SignedDebit, SignedTransfer,
+    Credit, CreditAgreementProof, Keypair, Money, PublicKey, Result as DtResult, Signature,
+    SignatureShare, SignedCredit, SignedDebit, SignedTransfer,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -228,15 +228,14 @@ impl ActorSigning for TestSigning {
         }
     }
 
-    fn sign(&self, data: &[u8]) -> Signature {
-        self.keypair.sign(data)
+    fn sign<T: serde::Serialize>(&self, data: &T) -> DtResult<Signature> {
+        use sn_data_types::Error as DtError;
+        let bytes = bincode::serialize(data).map_err(|e| DtError::Serialisation(e.to_string()))?;
+        Ok(self.keypair.sign(&bytes))
     }
 
-    fn verify(&self, signature: &Signature, data: &[u8]) -> Result<()> {
-        self.keypair
-            .public_key()
-            .verify(signature, data)
-            .map_err(Error::NetworkDataError)
+    fn verify(&self, signature: &Signature, data: &[u8]) -> bool {
+        self.keypair.public_key().verify(signature, data).is_ok()
     }
 }
 
