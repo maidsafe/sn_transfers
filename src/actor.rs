@@ -16,7 +16,8 @@ use itertools::Itertools;
 use log::debug;
 use sn_data_types::{
     ActorHistory, Credit, CreditAgreementProof, CreditId, Debit, DebitId, Money, PublicKey,
-    Signature, SignatureShare, SignedCredit, SignedDebit, TransferAgreementProof, WalletInfo,
+    Result as DtResult, Signature, SignatureShare, SignedCredit, SignedDebit,
+    TransferAgreementProof, WalletInfo,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use threshold_crypto::PublicKeySet;
@@ -25,12 +26,10 @@ use threshold_crypto::PublicKeySet;
 pub trait ActorSigning {
     ///
     fn id(&self) -> WalletOwner;
-    // ///
-    // fn multi_id(&self) -> Option<&PublicKeySet>;
     ///
-    fn sign(&self, data: &[u8]) -> Signature;
+    fn sign<T: serde::Serialize>(&self, data: &T) -> DtResult<Signature>;
     ///
-    fn verify(&self, sig: &Signature, data: &[u8]) -> Result<()>;
+    fn verify(&self, sig: &Signature, data: &[u8]) -> bool;
 }
 
 /// The Actor is the part of an AT2 system
@@ -187,14 +186,14 @@ impl<V: ReplicaValidator, S: ActorSigning> Actor<V, S> {
             Err(_) => return Err(Error::Serialisation("Could not serialise debit".into())),
             Ok(data) => SignedDebit {
                 debit,
-                actor_signature: self.signing.sign(&data),
+                actor_signature: self.signing.sign(&data)?,
             },
         };
         let signed_credit = match bincode::serialize(&credit) {
             Err(_) => return Err(Error::Serialisation("Could not serialise credit".into())),
             Ok(data) => SignedCredit {
                 credit,
-                actor_signature: self.signing.sign(&data),
+                actor_signature: self.signing.sign(&data).map_err(Error::NetworkDataError)?,
             },
         };
 
@@ -637,7 +636,7 @@ impl<V: ReplicaValidator, S: ActorSigning> Actor<V, S> {
                     false
                 }
             }
-            ed @ Signature::Ed25519(_) => self.signing.verify(ed, &data).is_ok(),
+            ed @ Signature::Ed25519(_) => self.signing.verify(ed, &data),
             Signature::BlsShare(share) => {
                 if let WalletOwner::Multi(set) = self.owner() {
                     let pubkey_share = set.public_key_share(share.index);
