@@ -29,7 +29,7 @@ pub trait ActorSigning {
     ///
     fn sign<T: serde::Serialize>(&self, data: &T) -> DtResult<Signature>;
     ///
-    fn verify(&self, sig: &Signature, data: &[u8]) -> bool;
+    fn verify<T: serde::Serialize>(&self, sig: &Signature, data: &T) -> bool;
 }
 
 /// The Actor is the part of an AT2 system
@@ -182,19 +182,15 @@ impl<V: ReplicaValidator, S: ActorSigning> Actor<V, S> {
             msg,
         };
 
-        let signed_debit = match bincode::serialize(&debit) {
-            Err(_) => return Err(Error::Serialisation("Could not serialise debit".into())),
-            Ok(data) => SignedDebit {
-                debit,
-                actor_signature: self.signing.sign(&data)?,
-            },
+        let actor_signature = self.signing.sign(&debit)?;
+        let signed_debit = SignedDebit {
+            debit,
+            actor_signature,
         };
-        let signed_credit = match bincode::serialize(&credit) {
-            Err(_) => return Err(Error::Serialisation("Could not serialise credit".into())),
-            Ok(data) => SignedCredit {
-                credit,
-                actor_signature: self.signing.sign(&data).map_err(Error::NetworkDataError)?,
-            },
+        let actor_signature = self.signing.sign(&credit)?;
+        let signed_credit = SignedCredit {
+            credit,
+            actor_signature,
         };
 
         Outcome::success(TransferInitiated {
@@ -605,18 +601,16 @@ impl<V: ReplicaValidator, S: ActorSigning> Actor<V, S> {
         signed_credit: &SignedCredit,
     ) -> Result<()> {
         debug!("Actor: Verifying is our transfer!");
-        let valid_debit = match bincode::serialize(&signed_debit.debit) {
-            Err(_) => return Err(Error::Serialisation("Could not serialise transfer".into())),
-            Ok(data) => self.validate(data, &signed_debit.actor_signature),
-        };
-        let valid_credit = match bincode::serialize(&signed_credit.credit) {
-            Err(_) => return Err(Error::Serialisation("Could not serialise transfer".into())),
-            Ok(data) => self.validate(data, &signed_credit.actor_signature),
-        };
+        let valid_debit = self
+            .signing
+            .verify(&signed_debit.actor_signature, &signed_debit.debit);
+        let valid_credit = self
+            .signing
+            .verify(&signed_credit.actor_signature, &signed_credit.credit);
 
         if !(valid_debit && valid_credit) {
             debug!(
-                "Actor: Invalid debit sig? {}, invalid credit sig? {}",
+                "Actor: Valid debit sig? {}, Valid credit sig? {}",
                 valid_debit, valid_credit
             );
             Err(Error::InvalidSignature)
@@ -624,27 +618,6 @@ impl<V: ReplicaValidator, S: ActorSigning> Actor<V, S> {
             Err(Error::CreditDebitIdMismatch)
         } else {
             Ok(())
-        }
-    }
-
-    fn validate(&self, data: Vec<u8>, sig: &Signature) -> bool {
-        match sig {
-            Signature::Bls(sig) => {
-                if let WalletOwner::Multi(set) = self.owner() {
-                    set.public_key().verify(&sig, data)
-                } else {
-                    false
-                }
-            }
-            ed @ Signature::Ed25519(_) => self.signing.verify(ed, &data),
-            Signature::BlsShare(share) => {
-                if let WalletOwner::Multi(set) = self.owner() {
-                    let pubkey_share = set.public_key_share(share.index);
-                    pubkey_share.verify(&share.share, data)
-                } else {
-                    false
-                }
-            }
         }
     }
 }

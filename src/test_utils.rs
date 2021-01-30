@@ -234,8 +234,29 @@ impl ActorSigning for TestSigning {
         Ok(self.keypair.sign(&bytes))
     }
 
-    fn verify(&self, signature: &Signature, data: &[u8]) -> bool {
-        self.keypair.public_key().verify(signature, data).is_ok()
+    fn verify<T: serde::Serialize>(&self, signature: &Signature, data: &T) -> bool {
+        let data = match bincode::serialize(&data) {
+            Err(_) => return false,
+            Ok(data) => data,
+        };
+        match signature {
+            Signature::Bls(sig) => {
+                if let WalletOwner::Multi(set) = self.id() {
+                    set.public_key().verify(&sig, data)
+                } else {
+                    false
+                }
+            }
+            ed @ Signature::Ed25519(_) => self.keypair.public_key().verify(ed, data).is_ok(),
+            Signature::BlsShare(share) => {
+                if let WalletOwner::Multi(set) = self.id() {
+                    let pubkey_share = set.public_key_share(share.index);
+                    pubkey_share.verify(&share.share, data)
+                } else {
+                    false
+                }
+            }
+        }
     }
 }
 
