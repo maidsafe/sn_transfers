@@ -15,8 +15,8 @@ use log::debug;
 #[cfg(feature = "simulated-payouts")]
 use sn_data_types::Credit;
 use sn_data_types::{
-    CreditAgreementProof, Debit, Money, OwnerType, PublicKey, ReplicaEvent, Signature,
-    SignedCredit, SignedDebit, SignedTransfer, SignedTransferShare, TransferAgreementProof,
+    CreditAgreementProof, Debit, OwnerType, PublicKey, ReplicaEvent, Signature, SignedCredit,
+    SignedDebit, SignedTransfer, SignedTransferShare, Token, TransferAgreementProof,
     TransferRegistered, TransferValidationProposed,
 };
 use std::collections::{BTreeMap, HashMap};
@@ -109,7 +109,7 @@ impl WalletReplica {
     /// -----------------------------------------------------------------
 
     ///
-    pub fn balance(&self) -> Money {
+    pub fn balance(&self) -> Token {
         self.wallet.balance()
     }
 
@@ -131,13 +131,13 @@ impl WalletReplica {
         past_key: F,
     ) -> Outcome<()> {
         // Genesis must be the first credit.
-        if self.balance() != Money::zero() || self.pending_debit.is_some() {
+        if self.balance() != Token::zero() || self.pending_debit.is_some() {
             return Err(Error::InvalidOperation);
         }
         self.receive_propagated(credit_proof, past_key)
     }
 
-    /// For now, with test money there is no from wallet.., money is created from thin air.
+    /// For now, with test token there is no from wallet.., token is created from thin air.
     pub fn test_validate_transfer(
         &self,
         signed_debit: &SignedDebit,
@@ -175,7 +175,7 @@ impl WalletReplica {
             return Outcome::rejected(Error::CreditDebitIdMismatch);
         } else if credit.amount() != debit.amount() {
             return Outcome::rejected(Error::CreditDebitValueMismatch);
-        } else if debit.amount() == Money::zero() {
+        } else if debit.amount() == Token::zero() {
             return Outcome::rejected(Error::ZeroValueTransfer);
         } else if self.wallet.id().public_key() != debit.sender() {
             return Outcome::rejected(Error::NoSuchSender);
@@ -434,7 +434,7 @@ impl WalletReplica {
             return Outcome::rejected(Error::CreditDebitIdMismatch);
         } else if credit.amount() != debit.amount() {
             return Outcome::rejected(Error::CreditDebitValueMismatch);
-        } else if debit.amount() == Money::zero() {
+        } else if debit.amount() == Token::zero() {
             return Outcome::rejected(Error::ZeroValueTransfer);
         } else if self.id.public_key() != debit.sender() {
             return Outcome::rejected(Error::NoSuchSender);

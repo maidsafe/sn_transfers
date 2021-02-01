@@ -12,7 +12,7 @@ version = "0.2.12"
 
 [dependencies]
 bincode = "1.2.1"
-sn_data_types = "~0.13.5"
+sn_data_types = "~0.14.0"
 thiserror = "1.0.23"
 crdts = "4.3.0"
 threshold_crypto = "~0.4.0"

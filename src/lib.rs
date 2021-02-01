@@ -37,7 +37,7 @@ pub use self::{
 
 use serde::{Deserialize, Serialize};
 use sn_data_types::{
-    CreditId, DebitId, Money, PublicKey, SignedCredit, SignedDebit, TransferAgreementProof,
+    CreditId, DebitId, PublicKey, SignedCredit, SignedDebit, Token, TransferAgreementProof,
     TransferValidated,
 };
 use std::collections::HashSet;
@@ -104,7 +104,7 @@ pub enum ActorEvent {
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct TransfersSynched {
     id: PublicKey,
-    balance: Money,
+    balance: Token,
     debit_version: u64,
     credit_ids: HashSet<CreditId>,
 }
@@ -157,9 +157,9 @@ mod test {
         Dot,
     };
     use sn_data_types::{
-        ActorHistory, Credit, CreditAgreementProof, CreditId, Debit, Keypair, Money, OwnerType,
-        PublicKey, ReplicaEvent, SignatureShare, SignedCredit, SignedDebit, SignedTransfer,
-        Transfer, TransferAgreementProof,
+        ActorHistory, Credit, CreditAgreementProof, CreditId, Debit, Keypair, OwnerType, PublicKey,
+        ReplicaEvent, SignatureShare, SignedCredit, SignedDebit, SignedTransfer, Token, Transfer,
+        TransferAgreementProof,
     };
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
@@ -385,12 +385,12 @@ mod test {
 
         // --- Assert ---
         // Actor and Replicas have the correct balance.
-        assert_balance(sender, Money::zero());
-        assert_balance(recipient, Money::from_nano(recipient_final));
+        assert_balance(sender, Token::zero());
+        assert_balance(recipient, Token::from_nano(recipient_final));
         Ok(Some(()))
     }
 
-    fn assert_balance(actor: TestActor, amount: Money) {
+    fn assert_balance(actor: TestActor, amount: Token) {
         assert!(actor.actor.balance() == amount);
         actor.section.elders.iter().for_each(|elder| {
             let wallet = match elder.replicas.get(&actor.actor.id()) {
@@ -581,7 +581,7 @@ mod test {
     ) -> Result<TestWallet> {
         let mut wallet = wallet;
         if balance > 0 {
-            let amount = Money::from_nano(balance);
+            let amount = Token::from_nano(balance);
             let sender = Dot::new(get_random_pk(), 0);
             let debit = Debit { id: sender, amount };
             let credit = Credit {

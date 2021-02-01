@@ -15,9 +15,8 @@ use crdts::Dot;
 use itertools::Itertools;
 use log::debug;
 use sn_data_types::{
-    ActorHistory, Credit, CreditAgreementProof, CreditId, Debit, DebitId, Money, OwnerType,
-    PublicKey, SignatureShare, SignedCredit, SignedDebit, Signing, TransferAgreementProof,
-    WalletInfo,
+    ActorHistory, Credit, CreditAgreementProof, CreditId, Debit, DebitId, OwnerType, PublicKey,
+    SignatureShare, SignedCredit, SignedDebit, Signing, Token, TransferAgreementProof, WalletInfo,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use threshold_crypto::PublicKeySet;
@@ -123,7 +122,7 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
     }
 
     /// Query for the balance of the Actor.
-    pub fn balance(&self) -> Money {
+    pub fn balance(&self) -> Token {
         self.wallet.balance()
     }
 
@@ -139,7 +138,7 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
     /// Step 1. Build a valid cmd for validation of a debit.
     pub fn transfer(
         &self,
-        amount: Money,
+        amount: Token,
         recipient: PublicKey,
         msg: String,
     ) -> Outcome<TransferInitiated> {
@@ -160,7 +159,7 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
             return Outcome::rejected(Error::InsufficientBalance);
         }
 
-        if amount == Money::from_nano(0) {
+        if amount == Token::from_nano(0) {
             return Outcome::rejected(Error::ZeroValueTransfer);
         }
 
@@ -315,7 +314,7 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
     ///
     pub fn synch(
         &self,
-        balance: Money,
+        balance: Token,
         debit_version: u64,
         credit_ids: HashSet<CreditId>,
     ) -> Outcome<TransfersSynched> {
@@ -621,7 +620,7 @@ mod test {
     use crdts::Dot;
     use serde::Serialize;
     use sn_data_types::{
-        Credit, Debit, Keypair, Money, PublicKey, Signature, SignatureShare,
+        Credit, Debit, Keypair, PublicKey, Signature, SignatureShare, Token,
         TransferAgreementProof, TransferValidated,
     };
     use std::collections::BTreeMap;
@@ -646,7 +645,7 @@ mod test {
         // Act
         let initial_amount = 10;
         let (actor, _sk_set) = get_actor_and_replicas_sk_set(initial_amount)?;
-        assert_eq!(actor.balance(), Money::from_nano(initial_amount));
+        assert_eq!(actor.balance(), Token::from_nano(initial_amount));
         Ok(())
     }
 
@@ -664,7 +663,7 @@ mod test {
     fn cannot_initiate_0_value_transfers() -> anyhow::Result<()> {
         let (actor, _sk_set) = get_actor_and_replicas_sk_set(10)?;
 
-        match actor.transfer(Money::from_nano(0), get_random_pk(), "asfd".to_string()) {
+        match actor.transfer(Token::from_nano(0), get_random_pk(), "asfd".to_string()) {
             Ok(_) => Err(anyhow::anyhow!(
                 "Should not be able to send 0 value transfers",
             )),
@@ -686,7 +685,7 @@ mod test {
         actor.apply(ActorEvent::TransferInitiated(debit.clone()))?;
         let transfer_event = get_transfer_registration_sent(debit, &sk_set)?;
         actor.apply(ActorEvent::TransferRegistrationSent(transfer_event))?;
-        assert_eq!(Money::from_nano(5), actor.balance());
+        assert_eq!(Token::from_nano(5), actor.balance());
         Ok(())
     }
 
@@ -700,14 +699,14 @@ mod test {
         let transfer_event = get_transfer_registration_sent(debit, &sk_set)?;
         actor.apply(ActorEvent::TransferRegistrationSent(transfer_event))?;
 
-        assert_eq!(Money::from_nano(12), actor.balance()); // 22 - 10
+        assert_eq!(Token::from_nano(12), actor.balance()); // 22 - 10
 
         let debit2 = get_debit(&actor)?;
         actor.apply(ActorEvent::TransferInitiated(debit2.clone()))?;
         let transfer_event = get_transfer_registration_sent(debit2, &sk_set)?;
         actor.apply(ActorEvent::TransferRegistrationSent(transfer_event))?;
 
-        assert_eq!(Money::from_nano(2), actor.balance()); // 22 - 10 - 10
+        assert_eq!(Token::from_nano(2), actor.balance()); // 22 - 10 - 10
         Ok(())
     }
 
@@ -743,7 +742,7 @@ mod test {
 
     fn get_debit(actor: &Actor<Validator, Keypair>) -> Result<TransferInitiated> {
         let event = actor
-            .transfer(Money::from_nano(10), get_random_pk(), "asdf".to_string())?
+            .transfer(Token::from_nano(10), get_random_pk(), "asdf".to_string())?
             .ok_or(Error::UnexpectedOutcome)?;
         Ok(event)
     }
@@ -864,7 +863,7 @@ mod test {
         let client_pubkey = keypair.public_key();
         let bls_secret_key = SecretKeySet::random(1, &mut rng);
         let replicas_id = bls_secret_key.public_keys();
-        let balance = Money::from_nano(amount);
+        let balance = Token::from_nano(amount);
         let sender = Dot::new(get_random_pk(), 0);
         let credit = get_credit(sender, client_pubkey, balance)?;
         let replica_validator = Validator {};
@@ -875,7 +874,7 @@ mod test {
         Ok((actor, bls_secret_key))
     }
 
-    fn get_credit(from: Dot<PublicKey>, recipient: PublicKey, amount: Money) -> Result<Credit> {
+    fn get_credit(from: Dot<PublicKey>, recipient: PublicKey, amount: Token) -> Result<Credit> {
         let debit = Debit { id: from, amount };
         Ok(Credit {
             id: debit.credit_id()?,
