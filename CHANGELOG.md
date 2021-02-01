@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.2.12](https://github.com/maidsafe/sn_transfers/compare/v0.2.11...v0.2.12) (2021-02-01)
+
+
+### Features
+
+* use udpated DT keypair w/ internal Arc ([aab49eb](https://github.com/maidsafe/sn_transfers/commit/aab49eb7ecfd47499cb048f148f87f00cfff796a))
+
+
+### Bug Fixes
+
+* **signing:** receive unserialized data for sign and verify ([ecd1f8f](https://github.com/maidsafe/sn_transfers/commit/ecd1f8ffc0dbcb722782f59aad25ecc3df3e0b50))
+
 ### [0.2.11](https://github.com/maidsafe/sn_transfers/compare/v0.2.10...v0.2.11) (2021-01-29)
 
 
