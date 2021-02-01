@@ -8,8 +8,8 @@
 
 use crate::{Error, ReplicaValidator, Result, TransferActor as Actor, Wallet, WalletReplica};
 use sn_data_types::{
-    Credit, CreditAgreementProof, Keypair, Money, PublicKey, SignatureShare, SignedCredit,
-    SignedDebit, SignedTransfer,
+    Credit, CreditAgreementProof, Keypair, PublicKey, SignatureShare, SignedCredit, SignedDebit,
+    SignedTransfer, Token,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -46,7 +46,7 @@ pub fn get_genesis(
 ) -> Result<CreditAgreementProof> {
     let credit = Credit {
         id: Default::default(),
-        amount: Money::from_nano(balance),
+        amount: Token::from_nano(balance),
         recipient: id,
         msg: "genesis".to_string(),
     };
@@ -106,7 +106,7 @@ pub fn get_multi_genesis(
 ) -> Result<CreditAgreementProof> {
     let credit = Credit {
         id: Default::default(),
-        amount: Money::from_nano(balance),
+        amount: Token::from_nano(balance),
         recipient: id,
         msg: "genesis".to_string(),
     };

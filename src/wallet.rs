@@ -8,12 +8,12 @@
 
 use crate::{Error, Result};
 use log::debug;
-use sn_data_types::{Credit, CreditId, Debit, Money, OwnerType};
+use sn_data_types::{Credit, CreditId, Debit, OwnerType, Token};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct WalletSnapshot {
-    pub balance: Money,
+    pub balance: Token,
     pub debit_version: u64,
     pub credit_ids: HashSet<CreditId>,
 }
@@ -32,7 +32,7 @@ impl Into<WalletSnapshot> for Wallet {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wallet {
     id: OwnerType,
-    balance: Money,
+    balance: Token,
     debit_version: u64,
     credit_ids: HashSet<CreditId>,
 }
@@ -42,7 +42,7 @@ impl Wallet {
     pub fn new(id: OwnerType) -> Self {
         Self {
             id,
-            balance: Money::zero(),
+            balance: Token::zero(),
             debit_version: 0,
             credit_ids: Default::default(),
         }
@@ -51,7 +51,7 @@ impl Wallet {
     /// Creates a wallet from existing state.
     pub fn from(
         id: OwnerType,
-        balance: Money,
+        balance: Token,
         debit_version: u64,
         credit_ids: HashSet<CreditId>,
     ) -> Self {
@@ -74,7 +74,7 @@ impl Wallet {
     }
 
     /// Query for balance.
-    pub fn balance(&self) -> Money {
+    pub fn balance(&self) -> Token {
         self.balance
     }
 
@@ -158,7 +158,7 @@ mod test {
     #[test]
     fn applies_credits() -> Result<()> {
         // Arrange
-        let balance = Money::from_nano(10);
+        let balance = Token::from_nano(10);
         let first_credit = Credit {
             id: Default::default(),
             recipient: get_random_pk(),
@@ -186,7 +186,7 @@ mod test {
     #[test]
     fn applies_debits() -> Result<()> {
         // Arrange
-        let balance = Money::from_nano(10);
+        let balance = Token::from_nano(10);
         let first_credit = Credit {
             id: Default::default(),
             recipient: get_random_pk(),
@@ -204,7 +204,7 @@ mod test {
         wallet.apply_debit(first_debit)?;
 
         // Assert
-        assert_eq!(wallet.balance(), Money::zero());
+        assert_eq!(wallet.balance(), Token::zero());
         assert_eq!(wallet.next_debit(), 1);
         Ok(())
     }

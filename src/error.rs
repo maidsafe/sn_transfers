@@ -7,7 +7,7 @@
 // permissions and limitations relating to use of the SAFE Network Software.
 
 use crdts::Dot;
-use sn_data_types::{Credit, Debit, Error as DtError, Money, PublicKey};
+use sn_data_types::{Credit, Debit, Error as DtError, PublicKey, Token};
 use thiserror::Error;
 #[derive(Error, Debug, PartialEq)]
 #[non_exhaustive]
@@ -72,10 +72,10 @@ pub enum Error {
     CreditDoesNotBelong(PublicKey, Credit),
     /// Subtracting this transfer would cause an overlow
     #[error("Overflow when subtracting {0} from balance of: {1}")]
-    SubtractionOverflow(Money, Money),
+    SubtractionOverflow(Token, Token),
     /// Adding this transfer would cause an overflow
     #[error("Overflow when adding balance {0} and credit of: {1}")]
-    AdditionOverflow(Money, Money),
+    AdditionOverflow(Token, Token),
     /// Unexpected outcome
     // TODO: clarify this...
     #[error("Unexpected outcome")]
