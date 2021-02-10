@@ -214,10 +214,6 @@ mod test {
 
         let event = ReplicaEvent::TransferPropagated(sn_data_types::TransferPropagated {
             credit_proof: genesis_credit.clone(),
-            crediting_replica_keys: PublicKey::Bls(
-                genesis_elder.signing.replicas_pk_set().public_key(),
-            ),
-            crediting_replica_sig: genesis_elder.signing.sign_credit_proof(&genesis_credit)?,
         });
         wallet_replica.apply(event)?;
 
@@ -276,10 +272,6 @@ mod test {
         wallet_replica.apply(ReplicaEvent::TransferPropagated(
             sn_data_types::TransferPropagated {
                 credit_proof: genesis_credit.clone(),
-                crediting_replica_keys: PublicKey::Bls(
-                    genesis_elder.signing.replicas_pk_set().public_key(),
-                ),
-                crediting_replica_sig: genesis_elder.signing.sign_credit_proof(&genesis_credit)?,
             },
         ))?;
         let balance = wallet_replica.balance();
@@ -311,10 +303,6 @@ mod test {
         wallet_replica.apply(ReplicaEvent::TransferPropagated(
             sn_data_types::TransferPropagated {
                 credit_proof: genesis_credit.clone(),
-                crediting_replica_keys: PublicKey::Bls(
-                    genesis_elder.signing.replicas_pk_set().public_key(),
-                ),
-                crediting_replica_sig: genesis_elder.signing.sign_credit_proof(&genesis_credit)?,
             },
         ))?;
 
@@ -507,13 +495,8 @@ mod test {
                     .receive_propagated(&credit_proof, || past_key)?
                     .ok_or(Error::UnexpectedOutcome)?;
 
-                let crediting_replica_sig = replica.signing.sign_credit_proof(&credit_proof)?;
                 let propagated = sn_data_types::TransferPropagated {
                     credit_proof: credit_proof.clone(),
-                    crediting_replica_keys: PublicKey::Bls(
-                        replica.signing.replicas_pk_set().public_key(),
-                    ),
-                    crediting_replica_sig,
                 };
                 // then apply to inmem state
                 wallet_replica.apply(ReplicaEvent::TransferPropagated(propagated.clone()))?;
