@@ -243,6 +243,7 @@ impl ReplicaSigning {
     }
 
     /// Get the replica's PK set
+    #[allow(unused)]
     pub fn replicas_pk_set(&self) -> &PublicKeySet {
         &self.peer_replicas
     }
@@ -279,16 +280,6 @@ impl ReplicaSigning {
     pub fn sign_validated_credit(&self, credit: &SignedCredit) -> Result<SignatureShare> {
         match bincode::serialize(credit) {
             Err(_) => Err(Error::Serialisation("Could not serialise credit".into())),
-            Ok(data) => Ok(SignatureShare {
-                index: self.key_index,
-                share: self.secret_key.sign(data),
-            }),
-        }
-    }
-
-    pub fn sign_credit_proof(&self, proof: &CreditAgreementProof) -> Result<SignatureShare> {
-        match bincode::serialize(proof) {
-            Err(_) => Err(Error::Serialisation("Could not serialise proof".into())),
             Ok(data) => Ok(SignatureShare {
                 index: self.key_index,
                 share: self.secret_key.sign(data),
