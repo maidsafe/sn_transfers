@@ -37,8 +37,8 @@ pub use self::{
 
 use serde::{Deserialize, Serialize};
 use sn_data_types::{
-    CreditId, DebitId, PublicKey, SignedCredit, SignedDebit, Token, TransferAgreementProof,
-    TransferValidated,
+    ActorHistory, CreditId, DebitId, PublicKey, SignedCredit, SignedDebit, Token,
+    TransferAgreementProof, TransferValidated,
 };
 use std::collections::HashSet;
 
@@ -93,6 +93,9 @@ pub enum ActorEvent {
     /// Raised when the Actor has received
     /// unknown credits on querying Replicas.
     TransfersSynched(TransfersSynched),
+    /// Raised when the Actor has received
+    /// unknown credits on querying Replicas.
+    StateSynched(StateSynched),
 }
 
 /// Raised when the Actor has received
@@ -102,12 +105,21 @@ pub enum ActorEvent {
 /// upon the registration of them from another
 /// instance of the same Actor.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
-pub struct TransfersSynched {
+pub struct StateSynched {
     id: PublicKey,
     balance: Token,
     debit_version: u64,
     credit_ids: HashSet<CreditId>,
 }
+
+/// Raised when the Actor has received
+/// f.ex. credits that its Replicas were holding upon
+/// the propagation of them from a remote group of Replicas,
+/// or unknown debits that its Replicas were holding
+/// upon the registration of them from another
+/// instance of the same Actor.
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
+pub struct TransfersSynched(ActorHistory);
 
 /// This event is raised by the Actor after having
 /// successfully created a transfer cmd to send to the
@@ -517,7 +529,7 @@ mod test {
             .get(&recipient.actor.id())
             .ok_or(Error::UnexpectedOutcome)?;
         let snapshot = wallet.wallet().ok_or(Error::UnexpectedOutcome)?;
-        let transfers = recipient
+        let state = recipient
             .actor
             .synch(
                 snapshot.balance,
@@ -525,9 +537,7 @@ mod test {
                 snapshot.credit_ids,
             )?
             .ok_or(Error::UnexpectedOutcome)?;
-        recipient
-            .actor
-            .apply(ActorEvent::TransfersSynched(transfers))
+        recipient.actor.apply(ActorEvent::StateSynched(state))
     }
 
     // ------------------------------------------------------------------------
