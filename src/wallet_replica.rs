@@ -387,6 +387,9 @@ impl WalletReplica {
                     return Ok(());
                 }
 
+                #[cfg(feature = "simulated-payouts")]
+                    return Ok(());
+
                 // Check if proof is signed with an older key
                 let public_key = past_key()?;
                 let valid_credit = public_key
