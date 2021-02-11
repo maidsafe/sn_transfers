@@ -6,10 +6,12 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
+use crate::StateSynched;
+
 use super::{
-    wallet::{Wallet, WalletSnapshot},
-    ActorEvent, Error, Outcome, ReplicaValidator, Result, TernaryResult, TransferInitiated,
-    TransferRegistrationSent, TransferValidated, TransferValidationReceived, TransfersSynched,
+    wallet::Wallet, ActorEvent, Error, Outcome, ReplicaValidator, Result, TernaryResult,
+    TransferInitiated, TransferRegistrationSent, TransferValidated, TransferValidationReceived,
+    TransfersSynched,
 };
 use crdts::Dot;
 use itertools::Itertools;
@@ -45,6 +47,8 @@ pub struct Actor<V: ReplicaValidator, S: Signing> {
     /// The passed in replica_validator, contains the logic from upper layers
     /// for determining if a remote group of Replicas, represented by a PublicKey, is indeed valid.
     replica_validator: V,
+    /// A log of applied events.
+    history: ActorHistory,
 }
 
 impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
@@ -67,22 +71,13 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
             wallet,
             next_expected_debit: 0,
             accumulating_validations: Default::default(),
+            history: ActorHistory::empty(),
         }
     }
 
     ///
     pub fn from_info(signing: S, info: WalletInfo, replica_validator: V) -> Result<Actor<V, S>> {
-        let id = signing.id();
-        let wallet = Wallet::new(id.clone());
-        let mut actor = Actor {
-            id,
-            signing,
-            replicas: info.replicas,
-            replica_validator,
-            wallet,
-            next_expected_debit: 0,
-            accumulating_validations: Default::default(),
-        };
+        let mut actor = Self::new(signing, info.replicas, replica_validator);
         if let Some(e) = actor.from_history(info.history)? {
             actor.apply(ActorEvent::TransfersSynched(e))?;
         }
@@ -105,6 +100,7 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
             wallet,
             next_expected_debit: 0,
             accumulating_validations: Default::default(),
+            history: ActorHistory::empty(),
         }
     }
 
@@ -128,8 +124,18 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
     }
 
     ///
-    pub fn replicas(&self) -> PublicKey {
+    pub fn replicas_public_key(&self) -> PublicKey {
         PublicKey::Bls(self.replicas.public_key())
+    }
+
+    ///
+    pub fn replicas_key_set(&self) -> PublicKeySet {
+        self.replicas.clone()
+    }
+
+    /// History of credits and debits
+    pub fn history(&self) -> ActorHistory {
+        self.history.clone()
     }
 
     /// -----------------------------------------------------------------
@@ -318,9 +324,9 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
         balance: Token,
         debit_version: u64,
         credit_ids: HashSet<CreditId>,
-    ) -> Outcome<TransfersSynched> {
+    ) -> Outcome<StateSynched> {
         // todo: use WalletSnapshot, aggregate sigs
-        Outcome::success(TransfersSynched {
+        Outcome::success(StateSynched {
             id: self.id(),
             balance,
             debit_version,
@@ -354,21 +360,22 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
         let credits = self.validate_credits(&history.credits);
         let debits = self.validate_debits(&history.debits);
         if !credits.is_empty() || !debits.is_empty() {
-            let mut wallet = self.wallet.clone();
-            for credit in credits {
-                // append credits _before_ debits
-                wallet.apply_credit(credit.signed_credit.credit)?;
-            }
-            for proof in debits {
-                // append debits _after_ credits
-                wallet.apply_debit(proof.signed_debit.debit)?;
-            }
-            let snapshot: WalletSnapshot = wallet.into();
-            self.synch(
-                snapshot.balance,
-                snapshot.debit_version,
-                snapshot.credit_ids,
-            )
+            Outcome::success(TransfersSynched(ActorHistory { credits, debits }))
+        // let mut wallet = self.wallet.clone();
+        // for credit in credits {
+        //     // append credits _before_ debits
+        //     wallet.apply_credit(credit.signed_credit.credit)?;
+        // }
+        // for proof in debits {
+        //     // append debits _after_ credits
+        //     wallet.apply_debit(proof.signed_debit.debit)?;
+        // }
+        // let snapshot: WalletSnapshot = wallet.into();
+        // self.synch(
+        //     snapshot.balance,
+        //     snapshot.debit_version,
+        //     snapshot.credit_ids,
+        // )
         } else {
             Err(Error::NothingToSync) // TODO: the error is actually that credits and/or debits failed validation..
         }
@@ -453,11 +460,27 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
             }
             ActorEvent::TransferRegistrationSent(e) => {
                 self.wallet
-                    .apply_debit(e.transfer_proof.signed_debit.debit)?;
+                    .apply_debit(e.transfer_proof.signed_debit.debit.clone())?;
                 self.accumulating_validations.clear();
+                self.history.debits.push(e.transfer_proof);
                 Ok(())
             }
             ActorEvent::TransfersSynched(e) => {
+                for credit in e.0.credits {
+                    // append credits _before_ debits
+                    self.wallet
+                        .apply_credit(credit.signed_credit.credit.clone())?;
+                    self.history.credits.push(credit);
+                }
+                for debit in e.0.debits {
+                    // append debits _after_ credits
+                    self.wallet.apply_debit(debit.signed_debit.debit.clone())?;
+                    self.history.debits.push(debit);
+                }
+                self.next_expected_debit = self.wallet.next_debit();
+                Ok(())
+            }
+            ActorEvent::StateSynched(e) => {
                 self.wallet = Wallet::from(
                     self.owner().clone(),
                     e.balance,
