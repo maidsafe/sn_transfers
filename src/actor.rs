@@ -361,21 +361,6 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
         let debits = self.validate_debits(&history.debits);
         if !credits.is_empty() || !debits.is_empty() {
             Outcome::success(TransfersSynched(ActorHistory { credits, debits }))
-        // let mut wallet = self.wallet.clone();
-        // for credit in credits {
-        //     // append credits _before_ debits
-        //     wallet.apply_credit(credit.signed_credit.credit)?;
-        // }
-        // for proof in debits {
-        //     // append debits _after_ credits
-        //     wallet.apply_debit(proof.signed_debit.debit)?;
-        // }
-        // let snapshot: WalletSnapshot = wallet.into();
-        // self.synch(
-        //     snapshot.balance,
-        //     snapshot.debit_version,
-        //     snapshot.credit_ids,
-        // )
         } else {
             Err(Error::NothingToSync) // TODO: the error is actually that credits and/or debits failed validation..
         }
