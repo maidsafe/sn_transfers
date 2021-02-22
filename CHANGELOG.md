@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [0.4.0](https://github.com/maidsafe/sn_transfers/compare/v0.3.3...v0.4.0) (2021-02-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deps:** actor.rs, rename fn replicas to replicas_public_key, change fn synch return type
+
+### Features
+
+* **actor:** expose history api ([3900c9b](https://github.com/maidsafe/sn_transfers/commit/3900c9b2c93f0b45c0b1faf561ad738a0379c7e4))
+
+
+* **deps:** update sn_data_types ([acc3f80](https://github.com/maidsafe/sn_transfers/commit/acc3f800e7fe40958bba9605e579dcb116352473))
+
 ### [0.3.3](https://github.com/maidsafe/sn_transfers/compare/v0.3.2...v0.3.3) (2021-02-22)
 
 ### [0.3.2](https://github.com/maidsafe/sn_transfers/compare/v0.3.1...v0.3.2) (2021-02-10)
