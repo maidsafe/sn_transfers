@@ -19,13 +19,14 @@ use sn_data_types::{
     SignatureShare, SignedCredit, SignedDebit, Signing, Token, TransferAgreementProof, WalletInfo,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
 use threshold_crypto::PublicKeySet;
 
 /// The Actor is the part of an AT2 system
 /// that initiates transfers, by requesting Replicas
 /// to validate them, and then receive the proof of agreement.
 /// It also syncs transfers from the Replicas.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Actor<V: ReplicaValidator, S: Signing> {
     ///
     id: OwnerType,
@@ -608,6 +609,22 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
         } else {
             Ok(())
         }
+    }
+}
+
+impl<V: ReplicaValidator + fmt::Debug, S: Signing + fmt::Debug> fmt::Debug for Actor<V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Actor {{ id: {:?}, signing: {:?}, wallet: {:?}, next_expected_debit: {:?}, accumulating_validations: {:?}, replicas: PkSet {{ public_key: {:?} }}, replica_validator: {:?} }}",
+            self.id,
+            self.signing,
+            self.wallet,
+            self.next_expected_debit,
+            self.accumulating_validations,
+            self.replicas.public_key(),
+            self.replica_validator
+        )
     }
 }
 

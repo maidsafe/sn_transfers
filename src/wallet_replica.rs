@@ -20,6 +20,7 @@ use sn_data_types::{
     TransferRegistered, TransferValidationProposed,
 };
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use threshold_crypto::{PublicKeySet, PublicKeyShare};
 
 macro_rules! hashmap {
@@ -37,7 +38,7 @@ macro_rules! hashmap {
 /// apply operations that has a valid "debit agreement proof"
 /// from the group, i.e. signatures from a quorum of its peers.
 /// Replicas don't initiate transfers or drive the algo - only Actors do.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct WalletReplica {
     /// The owner of the Wallet.
     id: OwnerType,
@@ -596,5 +597,21 @@ impl WalletReplica {
                 valid_debit, valid_credit
             )))
         }
+    }
+}
+
+impl fmt::Debug for WalletReplica {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "WalletReplica {{ id: {:?}, replica_id: {:?}, key_index: {:?}, peer_replicas: PkSet {{ public_key: {:?} }}, wallet: {:?}, pending_proposals: {:?}, pending_debit: {:?} }}",
+            self.id,
+            self.replica_id,
+            self.key_index,
+            self.peer_replicas.public_key(),
+            self.wallet,
+            self.pending_proposals,
+            self.pending_debit
+        )
     }
 }
