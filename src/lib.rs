@@ -527,7 +527,7 @@ mod test {
         let wallet = section.elders[0]
             .replicas
             .get(&recipient.actor.id())
-            .ok_or_else(|| Error::WalletNotFound(recipient.actor.id()))?;
+            .ok_or(Error::WalletNotFound(recipient.actor.id()))?;
         let snapshot = wallet.wallet().ok_or(Error::CouldNotGetWalletForReplica)?;
         let state = recipient
             .actor
