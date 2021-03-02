@@ -11,7 +11,7 @@ use super::{
     Outcome, TernaryResult,
 };
 use crate::{Error, Result};
-use log::debug;
+use log::{debug, error};
 #[cfg(feature = "simulated-payouts")]
 use sn_data_types::Credit;
 use sn_data_types::{
@@ -563,13 +563,13 @@ impl WalletReplica {
             });
             Outcome::success(proposal)
         } else {
-            debug!(
+            error!(
                 "valid debit? {:?} : sender: {:?} recipient {:?}",
                 valid_debit,
                 proposal.sender(),
                 proposal.recipient()
             );
-            debug!("valid credit? {:?}", valid_credit);
+            error!("valid credit? {:?}", valid_credit);
             // else, we have some corrupt data. (todo: Do we need to act on that fact?)
             Err(Error::InvalidCreditOrDebit)
         }

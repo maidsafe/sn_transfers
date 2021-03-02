@@ -209,7 +209,7 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
             debug!("Invalid signature in transfer/actor receive step.");
             return Err(Error::InvalidSignature);
         }
-        debug!("Actor: Verified validation.");
+        debug!(">>>>Actor: Verified validation.");
 
         let signed_debit = &validation.signed_debit;
         let signed_credit = &validation.signed_credit;
