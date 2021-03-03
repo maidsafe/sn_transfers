@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [0.5.0](https://github.com/maidsafe/sn_transfers/compare/v0.4.2...v0.5.0) (2021-03-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* new Sequence data-type doesn't allow Policy mutations.
+
+* upgrading data-types to v0.6.0 ([55c0043](https://github.com/maidsafe/sn_transfers/commit/55c00431f53c270bb26f1fdc044b8c32d7285f2f))
+
 ### [0.4.2](https://github.com/maidsafe/sn_transfers/compare/v0.4.1...v0.4.2) (2021-03-03)
 
 ### [0.4.1](https://github.com/maidsafe/sn_transfers/compare/v0.4.0...v0.4.1) (2021-02-25)
