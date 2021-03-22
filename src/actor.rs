@@ -84,7 +84,7 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
             Ok(None) => {}
             Err(error) => {
                 match error {
-                    Error::InvalidActorHistory => {
+                    Error::NoActorHistory => {
                         // do nothing
                     }
                     _ => return Err(error),
