@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [0.6.0](https://github.com/maidsafe/sn_transfers/compare/v0.5.0...v0.6.0) (2021-03-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* Use latest Dts bump.
+
+*Tidies up some logging
+
+### Features
+
+* sn_dts dep update. ([aeb6159](https://github.com/maidsafe/sn_transfers/commit/aeb6159a3de02de24d992c619914e074d78ff6d4))
+* **error:** Disambiguate some errors ([705e0be](https://github.com/maidsafe/sn_transfers/commit/705e0be5e0bba4cdd08da95d9cdf5f3c175b9242))
+* **error:** rename NothingToSync to InvalidActorHistory ([2d150e7](https://github.com/maidsafe/sn_transfers/commit/2d150e777f791c2d9a99d12111831e7f2720ca1e))
+
+
+### Bug Fixes
+
+* couple of errors ([d1ad37c](https://github.com/maidsafe/sn_transfers/commit/d1ad37ced5d8d9dff51559f0431a4df23113b48c))
+* handle from_history error in from_info ([9a4a6e9](https://github.com/maidsafe/sn_transfers/commit/9a4a6e9ae6e149e8e1d699d0485ae327aa1a16d2))
+* incorrect error msg ([c89f40d](https://github.com/maidsafe/sn_transfers/commit/c89f40daa0b26f6aebcc0da642e3f70f8a489c08))
+
 ## [0.5.0](https://github.com/maidsafe/sn_transfers/compare/v0.4.2...v0.5.0) (2021-03-03)
 
 
