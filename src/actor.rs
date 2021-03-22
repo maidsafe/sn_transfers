@@ -455,10 +455,6 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
                 Ok(())
             }
             ActorEvent::TransferValidationReceived(e) => {
-                // if e.proof.is_some() {
-                //     // if we have a proof, then we have a valid set of replicas (potentially new) to update with
-                //     self.replicas = e.validation.replicas.clone();
-                // }
                 match self.accumulating_validations.get_mut(&e.validation.id()) {
                     Some(map) => {
                         let _ = map.insert(e.validation.replica_debit_sig.index, e.validation);
