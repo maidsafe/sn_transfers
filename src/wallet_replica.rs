@@ -11,7 +11,7 @@ use super::{
     Outcome, TernaryResult,
 };
 use crate::{Error, Result};
-use log::{debug, error};
+use log::debug;
 #[cfg(feature = "simulated-payouts")]
 use sn_data_types::Credit;
 use sn_data_types::{
@@ -428,7 +428,7 @@ impl WalletReplica {
         let debit = &signed_debit.debit;
 
         debug!(
-            ">>>> !!!!!! debit counter for this validation is: {:?}, the transfer is for: {:?}",
+            "debit counter for this validation is: {:?}, the transfer is for: {:?}",
             debit.id.counter,
             signed_transfer.credit().amount()
         );
@@ -563,13 +563,13 @@ impl WalletReplica {
             });
             Outcome::success(proposal)
         } else {
-            error!(
-                ">>>> valid debit? {:?} : sender: {:?} recipient {:?}",
+            debug!(
+                "valid debit? {:?} : sender: {:?} recipient {:?}",
                 valid_debit,
                 proposal.sender(),
                 proposal.recipient()
             );
-            error!(">>>> valid credit? {:?}", valid_credit);
+            debug!("valid credit? {:?}", valid_credit);
             // else, we have some corrupt data. (todo: Do we need to act on that fact?)
             Err(Error::InvalidCreditOrDebit)
         }
