@@ -58,6 +58,9 @@ pub enum Error {
     #[error("Operation out of order debit counter should be 0")]
     ShouldBeInitialOperation,
     /// No credits or debits were found to sync
+    #[error("There was no valid history found for provided actor.")]
+    NoActorHistory,
+    /// Credit history for the actor was invalid
     #[error("Provided actor history could not be validated.")]
     InvalidActorHistory,
     /// 0-value transfers are invalid
