@@ -82,14 +82,10 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
         match actor.from_history(info.history) {
             Ok(Some(event)) => actor.apply(ActorEvent::TransfersSynched(event))?,
             Ok(None) => {}
-            Err(error) => {
-                match error {
-                    Error::NoActorHistory => {
-                        // do nothing
-                    }
-                    _ => return Err(error),
-                }
+            Err(Error::NoActorHistory) => {
+                // do nothing
             }
+            Err(error) => return Err(error),
         }
 
         Ok(actor)
