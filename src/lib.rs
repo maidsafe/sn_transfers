@@ -213,15 +213,12 @@ mod test {
 
         let genesis_key = genesis_credit.recipient();
         let genesis_elder = &mut sections.remove(0).elders.remove(0);
-        let past_key = Ok(PublicKey::Bls(
-            genesis_elder.signing.replicas_pk_set().public_key(),
-        ));
         let wallet_replica = match genesis_elder.replicas.get_mut(&genesis_key) {
             Some(w) => w,
             None => panic!("Failed the test; no such wallet."),
         };
         let _ = wallet_replica
-            .genesis(&genesis_credit, || past_key)?
+            .genesis(&genesis_credit)?
             .ok_or(Error::GenesisFailed)?;
 
         let event = ReplicaEvent::TransferPropagated(sn_data_types::TransferPropagated {
@@ -270,15 +267,12 @@ mod test {
 
         let genesis_key = genesis_credit.recipient();
         let genesis_elder = &mut sections.remove(0).elders.remove(0);
-        let past_key = Ok(PublicKey::Bls(
-            genesis_elder.signing.replicas_pk_set().public_key(),
-        ));
         let wallet_replica = match genesis_elder.replicas.get_mut(&genesis_key) {
             Some(w) => w,
             None => panic!("Failed the test; no such wallet."),
         };
         let _ = wallet_replica
-            .genesis(&genesis_credit, || past_key)?
+            .genesis(&genesis_credit)?
             .ok_or(Error::GenesisFailed)?;
 
         wallet_replica.apply(ReplicaEvent::TransferPropagated(
@@ -303,13 +297,12 @@ mod test {
             ..
         } = setup_new_network(section_count, replica_count, section_configs)?;
         let genesis_elder = &mut sections.remove(0).elders.remove(0);
-        let past_key = PublicKey::Bls(genesis_credit.replica_keys().public_key());
         let wallet_replica = match genesis_elder.replicas.get_mut(&genesis_credit.recipient()) {
             Some(w) => w,
             None => panic!("Failed the test; no such wallet."),
         };
         let _ = wallet_replica
-            .genesis(&genesis_credit, || Ok(past_key))?
+            .genesis(&genesis_credit)?
             .ok_or(Error::GenesisFailed)?;
 
         wallet_replica.apply(ReplicaEvent::TransferPropagated(
@@ -319,7 +312,7 @@ mod test {
         ))?;
 
         // try genesis again..
-        let result = wallet_replica.genesis(&genesis_credit, || Ok(past_key));
+        let result = wallet_replica.genesis(&genesis_credit);
         match result {
             Ok(_) => panic!("Should not be able to genesis again."),
             Err(e) => assert_eq!(e, Error::InvalidOperation),
@@ -480,9 +473,8 @@ mod test {
                 Some(w) => w,
                 None => panic!("Failed the test; no such wallet."),
             };
-            let past_key = Ok(PublicKey::Bls(debit_proof.replica_keys().public_key()));
             let registered = wallet_replica
-                .register(debit_proof, || past_key)?
+                .register(debit_proof)?
                 .ok_or(Error::RegisterProofFailed)?;
             wallet_replica.apply(ReplicaEvent::TransferRegistered(registered))?;
         }
@@ -502,9 +494,8 @@ mod test {
                     Some(w) => w,
                     None => panic!("Failed the test; no such wallet."),
                 };
-                let past_key = Ok(PublicKey::Bls(credit_proof.replica_keys().public_key()));
                 let _ = wallet_replica
-                    .receive_propagated(&credit_proof, || past_key)?
+                    .receive_propagated(&credit_proof)?
                     .ok_or(Error::ReceivePropagationFailed)?;
 
                 let propagated = sn_data_types::TransferPropagated {

@@ -15,9 +15,9 @@ use log::{debug, error};
 #[cfg(feature = "simulated-payouts")]
 use sn_data_types::Credit;
 use sn_data_types::{
-    CreditAgreementProof, Debit, OwnerType, PublicKey, ReplicaEvent, Signature, SignedCredit,
-    SignedDebit, SignedTransfer, SignedTransferShare, Token, TransferAgreementProof,
-    TransferRegistered, TransferValidationProposed,
+    CreditAgreementProof, Debit, OwnerType, ReplicaEvent, Signature, SignedCredit, SignedDebit,
+    SignedTransfer, SignedTransferShare, Token, TransferAgreementProof, TransferRegistered,
+    TransferValidationProposed,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -126,16 +126,12 @@ impl WalletReplica {
 
     /// This is the one and only infusion of money to the system. Ever.
     /// It is carried out by the first node in the network.
-    pub fn genesis<F: FnOnce() -> Result<PublicKey>>(
-        &self,
-        credit_proof: &CreditAgreementProof,
-        past_key: F,
-    ) -> Outcome<()> {
+    pub fn genesis(&self, credit_proof: &CreditAgreementProof) -> Outcome<()> {
         // Genesis must be the first credit.
         if self.balance() != Token::zero() || self.pending_debit.is_some() {
             return Err(Error::InvalidOperation);
         }
-        self.receive_propagated(credit_proof, past_key)
+        self.receive_propagated(credit_proof)
     }
 
     /// For now, with test token there is no from wallet.., token is created from thin air.
@@ -194,18 +190,11 @@ impl WalletReplica {
     }
 
     /// Step 2. Validation of agreement, and order at debit source.
-    pub fn register<F: FnOnce() -> Result<PublicKey>>(
-        &self,
-        transfer_proof: &TransferAgreementProof,
-        past_key: F,
-    ) -> Outcome<TransferRegistered> {
+    pub fn register(&self, transfer_proof: &TransferAgreementProof) -> Outcome<TransferRegistered> {
         debug!("Checking registered transfer");
 
         // Always verify signature first! (as to not leak any information).
-        if self
-            .verify_registered_proof(transfer_proof, past_key)
-            .is_err()
-        {
+        if self.verify_registered_proof(transfer_proof).is_err() {
             return Err(Error::InvalidSignature);
         }
 
@@ -225,13 +214,9 @@ impl WalletReplica {
 
     /// Step 3. Validation of TransferAgreementProof, and credit idempotency at credit destination.
     /// (Since this leads to a credit, there is no requirement on order.)
-    pub fn receive_propagated<F: FnOnce() -> Result<PublicKey>>(
-        &self,
-        credit_proof: &CreditAgreementProof,
-        past_key: F,
-    ) -> Outcome<()> {
+    pub fn receive_propagated(&self, credit_proof: &CreditAgreementProof) -> Outcome<()> {
         // Always verify signature first! (as to not leak any information).
-        self.verify_propagated_proof(credit_proof, past_key)?;
+        self.verify_propagated_proof(credit_proof)?;
         if self.wallet.contains(&credit_proof.id()) {
             Outcome::no_change()
         } else {
@@ -335,11 +320,7 @@ impl WalletReplica {
 
     /// Verify that this is a valid _registered_
     /// TransferAgreementProof, i.e. signed by our peers.
-    fn verify_registered_proof<F: FnOnce() -> Result<PublicKey>>(
-        &self,
-        proof: &TransferAgreementProof,
-        past_key: F,
-    ) -> Result<()> {
+    fn verify_registered_proof(&self, proof: &TransferAgreementProof) -> Result<()> {
         if proof.signed_credit.id() != &proof.signed_debit.credit_id()? {
             return Err(Error::CreditDebitValueMismatch);
         }
@@ -359,59 +340,19 @@ impl WalletReplica {
         if valid_debit && valid_credit {
             return Ok(());
         }
-        // Check if proof is signed with an older key
-        let public_key = past_key()?;
-        let valid_debit = public_key.verify(&proof.debit_sig, &debit_bytes).is_ok();
-        let valid_credit = public_key.verify(&proof.credit_sig, &credit_bytes).is_ok();
-        if valid_debit && valid_credit {
-            return Ok(());
-        }
 
         // If it's not signed with our peers' public key, we won't consider it valid.
         Err(Error::InvalidSignature)
     }
 
-    /// Verify that this is a valid _propagated_
-    /// TransferAgreementProof, i.e. signed by a group that we know of.
-    fn verify_propagated_proof<F: FnOnce() -> Result<PublicKey>>(
-        &self,
-        proof: &CreditAgreementProof,
-        past_key: F,
-    ) -> Result<()> {
-        // Check that the proof corresponds to a public key set of some Replicas.
+    /// Verify the sig over the CreditAgreementProof.
+    fn verify_propagated_proof(&self, proof: &CreditAgreementProof) -> Result<()> {
         match bincode::serialize(&proof.signed_credit) {
             Err(_) => Err(Error::Serialisation("Could not serialise transfer".into())),
             Ok(credit_bytes) => {
-                // Check if it is from our group.
-                let our_key = sn_data_types::PublicKey::Bls(self.peer_replicas.public_key());
-                if our_key
-                    .verify(&proof.debiting_replicas_sig, &credit_bytes)
-                    .is_ok()
-                {
-                    return Ok(());
-                }
-
-                // Check if proof is signed with an older key
-                let public_key = past_key()?;
-                let valid_credit = public_key
-                    .verify(&proof.debiting_replicas_sig, &credit_bytes)
-                    .is_ok();
-                if valid_credit {
-                    return Ok(());
-                }
-
-                // // TODO: Check retrospectively(using SectionProofChain) for known groups also
-                // // Check all known groups of Replicas.
-                // for set in &self.other_groups {
-                //     let debiting_replicas = sn_data_types::PublicKey::Bls(set.public_key());
-                //     let result =
-                //         debiting_replicas.verify(&proof.debiting_replicas_sig, &credit_bytes);
-                //     if result.is_ok() {
-                //         return Ok(());
-                //     }
-                // }
-                // If we don't know the public key this was signed with, we won't consider it valid.
-                Err(Error::InvalidSignature)
+                let key = sn_data_types::PublicKey::Bls(proof.debiting_replicas_keys.public_key());
+                key.verify(&proof.debiting_replicas_sig, &credit_bytes)
+                    .map_err(|_| Error::InvalidSignature)
             }
         }
     }
