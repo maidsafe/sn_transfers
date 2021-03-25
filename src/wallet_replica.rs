@@ -434,13 +434,13 @@ impl WalletReplica {
         let map = self.pending_proposals.get(&debit_counter).unwrap_or(&map);
 
         // If the previous count of accumulated + current proposal coming in here,
-        // is greater than the threshold, then we have reached the quorum needed
-        // to build the agreed_transfer. (Quorum = threshold + 1)
-        let majority = map.len() + 1 > actors.threshold() && self.id.public_key() == id.actor;
+        // is greater than the threshold, then we have reached the numbers needed
+        // to build the agreed_transfer (= threshold + 1).
+        let agreed = map.len() + 1 > actors.threshold() && self.id.public_key() == id.actor;
 
-        if !majority {
-            debug!("No majority reached yet for proposal.");
-            // No majority reached yet,
+        if !agreed {
+            debug!("No agreement reached yet for proposal.");
+            // No agreement reached yet,
             // so the proposal does not have a populated agreement field.
             return Outcome::success(proposal);
         }

@@ -249,11 +249,11 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
         let mut proof = None;
 
         // If the previous count of accumulated + current validation coming in here,
-        // is greater than the threshold, then we have reached the quorum needed
-        // to build the proof. (Quorum = threshold + 1)
-        let majority = map.len() + 1 > self.replicas.key_set.threshold()
+        // is greater than the threshold, then we have reached the numbers needed
+        // to build the proof ( = threshold + 1).
+        let agreed = map.len() + 1 > self.replicas.key_set.threshold()
             && self.replicas.key_set == validation.replicas;
-        if majority {
+        if agreed {
             let debit_bytes = match bincode::serialize(&signed_debit) {
                 Err(_) => return Err(Error::Serialisation("Serialization Error".to_string())),
                 Ok(data) => data,
