@@ -67,15 +67,6 @@ impl<T> TernaryResult<T> for Outcome<T> {
 //                      Actor
 // ------------------------------------------------------------
 
-/// An implementation of the ReplicaValidator, should contain the logic from upper layers
-/// for determining if a remote group of Replicas, represented by a PublicKey, is indeed valid.
-/// This is logic from the membership part of the system, and thus handled by the upper layers
-/// membership implementation.
-pub trait ReplicaValidator {
-    /// Determines if a remote group of Replicas, represented by a PublicKey, is indeed valid.
-    fn is_valid(&self, section: PublicKey) -> bool;
-}
-
 /// Events raised by the Actor.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
@@ -162,7 +153,7 @@ pub struct TransferRegistrationSent {
 mod test {
     use crate::{
         actor::Actor, test_utils, test_utils::*, wallet, wallet_replica::WalletReplica, ActorEvent,
-        Error, ReplicaValidator, Result, TransferInitiated, Wallet,
+        Error, Result, TransferInitiated, Wallet,
     };
     use crdts::{
         quickcheck::{quickcheck, TestResult},
@@ -591,7 +582,7 @@ mod test {
             key_set: section.id.clone(),
             names: Default::default(),
         };
-        let actor = Actor::from_snapshot(wallet.wallet, wallet.keypair, replicas, Validator {});
+        let actor = Actor::from_snapshot(wallet.wallet, wallet.keypair, replicas);
 
         Ok(TestActor { actor, section })
     }

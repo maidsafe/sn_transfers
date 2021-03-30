@@ -9,9 +9,8 @@
 use crate::StateSynched;
 
 use super::{
-    wallet::Wallet, ActorEvent, Error, Outcome, ReplicaValidator, Result, TernaryResult,
-    TransferInitiated, TransferRegistrationSent, TransferValidated, TransferValidationReceived,
-    TransfersSynched,
+    wallet::Wallet, ActorEvent, Error, Outcome, Result, TernaryResult, TransferInitiated,
+    TransferRegistrationSent, TransferValidated, TransferValidationReceived, TransfersSynched,
 };
 use crdts::Dot;
 use itertools::Itertools;
@@ -30,7 +29,7 @@ use threshold_crypto::PublicKeySet;
 /// to validate them, and then receive the proof of agreement.
 /// It also syncs transfers from the Replicas.
 #[derive(Clone)]
-pub struct Actor<V: ReplicaValidator, S: Signing> {
+pub struct Actor<S: Signing> {
     ///
     id: OwnerType,
     ///
@@ -45,30 +44,22 @@ pub struct Actor<V: ReplicaValidator, S: Signing> {
     accumulating_validations: HashMap<DebitId, HashMap<usize, TransferValidated>>,
     /// The PK Set of the Replicas
     replicas: SectionElders,
-    /// The passed in replica_validator, contains the logic from upper layers
-    /// for determining if a remote group of Replicas, represented by a PublicKey, is indeed valid.
-    replica_validator: V,
     /// A log of applied events.
     history: ActorHistory,
 }
 
-impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
+impl<S: Signing> Actor<S> {
     /// Use this ctor for a new instance,
     /// or to rehydrate from events ([see the synch method](Actor::synch)).
     /// Pass in the key set of the replicas of this actor, i.e. our replicas.
     /// Credits to our wallet are most likely debited at other replicas than our own (the sender's replicas),
-    /// The replica_validator lets upper layer decide how to validate those remote replicas (i.e. not our replicas).
-    /// If upper layer trusts them, the validator might do nothing but return "true".
-    /// If it wants to execute some logic for verifying that the remote replicas are in fact part of the system,
-    /// before accepting credits, it then implements that in the replica_validator.
-    pub fn new(signing: S, replicas: SectionElders, replica_validator: V) -> Actor<V, S> {
+    pub fn new(signing: S, replicas: SectionElders) -> Actor<S> {
         let id = signing.id();
         let wallet = Wallet::new(id.clone());
         Actor {
             id,
             signing,
             replicas,
-            replica_validator,
             wallet,
             next_expected_debit: 0,
             accumulating_validations: Default::default(),
@@ -77,8 +68,8 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
     }
 
     ///
-    pub fn from_info(signing: S, info: WalletHistory, replica_validator: V) -> Result<Actor<V, S>> {
-        let mut actor = Self::new(signing, info.replicas, replica_validator);
+    pub fn from_info(signing: S, info: WalletHistory) -> Result<Actor<S>> {
+        let mut actor = Self::new(signing, info.replicas);
         match actor.from_history(info.history) {
             Ok(Some(event)) => actor.apply(ActorEvent::TransfersSynched(event))?,
             Ok(None) => {}
@@ -92,18 +83,12 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
     }
 
     /// Temp, for test purposes
-    pub fn from_snapshot(
-        wallet: Wallet,
-        signing: S,
-        replicas: SectionElders,
-        replica_validator: V,
-    ) -> Actor<V, S> {
+    pub fn from_snapshot(wallet: Wallet, signing: S, replicas: SectionElders) -> Actor<S> {
         let id = wallet.id().clone();
         Actor {
             id,
             signing,
             replicas,
-            replica_validator,
             wallet,
             next_expected_debit: 0,
             accumulating_validations: Default::default(),
@@ -357,9 +342,8 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
     /// Step xx. Continuously receiving credits from Replicas via push or pull model, decided by upper layer.
     /// The credits are most likely originating at an Actor whose Replicas are not the same as our Replicas.
     /// That means that the signature on the DebitAgreementProof, is that of some Replicas we don't know.
-    /// What we do here is to use the passed in replica_validator, that injects the logic from upper layers
+    /// What we do here is to validate replicas in upper layers
     /// for determining if this remote group of Replicas is indeed valid.
-    /// It should consider our Replicas valid as well, for the rare cases when sender replicate to the same group.
     ///
     /// This also ensures that we receive transfers initiated at other Actor instances (same id or other,
     /// i.e. with multiple instances of same Actor we can also sync debits made on other isntances).
@@ -590,15 +574,6 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
     fn verify_credit_proof(&self, proof: &CreditAgreementProof) -> Result<()> {
         let debiting_replicas_keys = PublicKey::Bls(proof.debiting_replicas_keys.public_key());
 
-        if !self.replica_validator.is_valid(debiting_replicas_keys) {
-            return Err(Error::Unknown(format!(
-                "Unknown debiting replica keys: {}",
-                debiting_replicas_keys
-            )));
-        }
-
-        // TODO: verify crediting replica sig??
-
         debug!("Verfying debiting_replicas_sig..!");
         // Check that the proof corresponds to a/the public key set of our Replicas.
         match bincode::serialize(&proof.signed_credit) {
@@ -637,18 +612,17 @@ impl<V: ReplicaValidator, S: Signing> Actor<V, S> {
     }
 }
 
-impl<V: ReplicaValidator + fmt::Debug, S: Signing + fmt::Debug> fmt::Debug for Actor<V, S> {
+impl<S: Signing + fmt::Debug> fmt::Debug for Actor<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Actor {{ id: {:?}, signing: {:?}, wallet: {:?}, next_expected_debit: {:?}, accumulating_validations: {:?}, replicas: PkSet {{ public_key: {:?} }}, replica_validator: {:?} }}",
+            "Actor {{ id: {:?}, signing: {:?}, wallet: {:?}, next_expected_debit: {:?}, accumulating_validations: {:?}, replicas: PkSet {{ public_key: {:?} }}}}",
             self.id,
             self.signing,
             self.wallet,
             self.next_expected_debit,
             self.accumulating_validations,
             self.replicas.key_set.public_key(),
-            self.replica_validator
         )
     }
 }
@@ -656,8 +630,8 @@ impl<V: ReplicaValidator + fmt::Debug, S: Signing + fmt::Debug> fmt::Debug for A
 #[cfg(test)]
 mod test {
     use super::{
-        Actor, ActorEvent, Error, OwnerType, ReplicaValidator, Result, TransferInitiated,
-        TransferRegistrationSent, Wallet,
+        Actor, ActorEvent, Error, OwnerType, Result, TransferInitiated, TransferRegistrationSent,
+        Wallet,
     };
     use crdts::Dot;
     use serde::Serialize;
@@ -668,13 +642,6 @@ mod test {
     use std::collections::BTreeMap;
     use threshold_crypto::{SecretKey, SecretKeySet};
     use xor_name::Prefix;
-    struct Validator {}
-
-    impl ReplicaValidator for Validator {
-        fn is_valid(&self, _replica_group: PublicKey) -> bool {
-            true
-        }
-    }
 
     #[test]
     fn creates_actor() -> Result<()> {
@@ -783,7 +750,7 @@ mod test {
         Ok(())
     }
 
-    fn get_debit(actor: &Actor<Validator, Keypair>) -> Result<TransferInitiated> {
+    fn get_debit(actor: &Actor<Keypair>) -> Result<TransferInitiated> {
         let event = actor
             .transfer(Token::from_nano(10), get_random_pk(), "asdf".to_string())?
             .ok_or(Error::TransferCreationFailed)?;
@@ -898,9 +865,7 @@ mod test {
         })
     }
 
-    fn get_actor_and_replicas_sk_set(
-        amount: u64,
-    ) -> Result<(Actor<Validator, Keypair>, SecretKeySet)> {
+    fn get_actor_and_replicas_sk_set(amount: u64) -> Result<(Actor<Keypair>, SecretKeySet)> {
         let mut rng = rand::thread_rng();
         let keypair = Keypair::new_ed25519(&mut rng);
         let client_pubkey = keypair.public_key();
@@ -909,7 +874,6 @@ mod test {
         let balance = Token::from_nano(amount);
         let sender = Dot::new(get_random_pk(), 0);
         let credit = get_credit(sender, client_pubkey, balance)?;
-        let replica_validator = Validator {};
         let mut wallet = Wallet::new(OwnerType::Single(credit.recipient()));
         wallet.apply_credit(credit)?;
 
@@ -919,7 +883,7 @@ mod test {
             key_set: replicas_id,
         };
 
-        let actor = Actor::from_snapshot(wallet, keypair, replicas, replica_validator);
+        let actor = Actor::from_snapshot(wallet, keypair, replicas);
         Ok((actor, bls_secret_key))
     }
 
