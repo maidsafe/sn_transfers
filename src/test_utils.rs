@@ -6,7 +6,7 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
-use crate::{Error, ReplicaValidator, Result, TransferActor as Actor, Wallet, WalletReplica};
+use crate::{Error, Result, TransferActor as Actor, Wallet, WalletReplica};
 use sn_data_types::{
     Credit, CreditAgreementProof, Keypair, PublicKey, SignatureShare, SignedCredit, SignedDebit,
     SignedTransfer, Token,
@@ -171,15 +171,6 @@ pub struct Network {
 }
 
 #[derive(Debug, Clone)]
-pub struct Validator {}
-
-impl ReplicaValidator for Validator {
-    fn is_valid(&self, _section: PublicKey) -> bool {
-        true
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct TestWallet {
     pub wallet: Wallet,
     pub keypair: Keypair,
@@ -188,7 +179,7 @@ pub struct TestWallet {
 
 #[derive(Debug, Clone)]
 pub struct TestActor {
-    pub actor: Actor<Validator, Keypair>,
+    pub actor: Actor<Keypair>,
     pub section: Section,
 }
 #[derive(Debug, Clone)]
