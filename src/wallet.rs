@@ -18,12 +18,12 @@ pub struct WalletSnapshot {
     pub credit_ids: HashSet<CreditId>,
 }
 
-impl Into<WalletSnapshot> for Wallet {
-    fn into(self) -> WalletSnapshot {
+impl From<Wallet> for WalletSnapshot {
+    fn from(other: Wallet) -> WalletSnapshot {
         WalletSnapshot {
-            balance: self.balance,
-            debit_version: self.debit_version,
-            credit_ids: self.credit_ids,
+            balance: other.balance,
+            debit_version: other.debit_version,
+            credit_ids: other.credit_ids,
         }
     }
 }
