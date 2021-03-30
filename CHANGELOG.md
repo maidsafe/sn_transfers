@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [0.7.0](https://github.com/maidsafe/sn_transfers/compare/v0.6.0...v0.7.0) (2021-03-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deps:** Changes to actor interface
+
+### Features
+
+* **error:** Disambiguate some errors ([bca7817](https://github.com/maidsafe/sn_transfers/commit/bca781735bbc64605947f49fd5fead3aa90fa040))
+
+
+### Bug Fixes
+
+* **clippy:** new warnings in latest rustc ([afb2a22](https://github.com/maidsafe/sn_transfers/commit/afb2a2258ca97c1bd6f4868fb3c802df178d4445))
+
+
+* **deps:** update sn_data_types ([1e80c4b](https://github.com/maidsafe/sn_transfers/commit/1e80c4b037b2645fd820724b3d0b065a113069cc))
+
 ## [0.6.0](https://github.com/maidsafe/sn_transfers/compare/v0.5.0...v0.6.0) (2021-03-22)
 
 
