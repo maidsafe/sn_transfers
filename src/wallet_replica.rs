@@ -180,7 +180,10 @@ impl WalletReplica {
             return Outcome::rejected(Error::ShouldBeInitialOperation);
         } else if let Some(counter) = self.pending_debit {
             if debit.id.counter != (counter + 1) {
-                return Outcome::rejected(Error::OperationOutOfOrder(debit.id.counter, counter));
+                return Outcome::rejected(Error::OperationOutOfOrder(
+                    debit.id.counter,
+                    counter + 1,
+                ));
             }
         } else if debit.amount() > self.balance() {
             return Outcome::rejected(Error::InsufficientBalance);
