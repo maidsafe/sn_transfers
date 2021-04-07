@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.7.1](https://github.com/maidsafe/sn_transfers/compare/v0.7.0...v0.7.1) (2021-04-07)
+
+
+### Bug Fixes
+
+* **errors:** pass in correct value to msg ([f465b3e](https://github.com/maidsafe/sn_transfers/commit/f465b3ec4a10dd231a00ff1cf18d03362748c2da))
+
 ## [0.7.0](https://github.com/maidsafe/sn_transfers/compare/v0.6.0...v0.7.0) (2021-03-30)
 
 
