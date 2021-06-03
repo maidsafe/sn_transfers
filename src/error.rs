@@ -9,7 +9,7 @@
 use crdts::Dot;
 use sn_data_types::{Credit, Debit, Error as DtError, PublicKey, Token};
 use thiserror::Error;
-#[derive(Error, Debug, PartialEq)]
+#[derive(Error, Debug, PartialEq, Clone)]
 #[non_exhaustive]
 /// SafeNetwork Transfers error type
 pub enum Error {
