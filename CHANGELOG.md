@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [0.8.0](https://github.com/maidsafe/sn_transfers/compare/v0.7.6...v0.8.0) (2021-06-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deps:** sn_data_types has a breaking change. This is a mend commit to get bump of major v, which was left out in previous commit.
+
+* **deps:** update dt ([c1216d4](https://github.com/maidsafe/sn_transfers/commit/c1216d472f68bf8d748f640642649a5abcc26129))
+
 ### [0.7.6](https://github.com/maidsafe/sn_transfers/compare/v0.7.5...v0.7.6) (2021-06-15)
 
 ### [0.7.5](https://github.com/maidsafe/sn_transfers/compare/v0.7.4...v0.7.5) (2021-06-09)
